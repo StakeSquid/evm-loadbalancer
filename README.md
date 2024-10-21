@@ -194,6 +194,36 @@ After building the project and setting up the configuration file, you can run th
 Command-line Options
 `--config`: Path to the configuration YAML file (default: `config.yaml`).
 
+## Connecting to the StakeSquid EVM Loadbalancer
+
+The load balancer can route your requests to the appropriate Ethereum network based on the configuration provided in `config.yaml`. You can interact with the load balancer via HTTP or HTTPS requests, and it will forward your request to the best available Ethereum node for the selected network.
+
+### How to Connect
+
+The load balancer listens on a specific port as defined in the `config.yaml` file. Each network is identified by its `name` field in the configuration file, and you will use that network name in the URL path when making requests.
+
+For example, assuming you have configured the load balancer to run on port 8080 and have defined the following networks:
+
+- `mainnet`
+- `ropsten`
+
+The loadbalancer exposes the endpoints as such:
+```bash
+http://localhost:8080/mainnet
+or
+http://localhost:8080/ropsten
+```
+
+### Testing the connection
+
+To make an RPC request, simply use the appropriate URL and include your JSON-RPC payload. Here's an example of querying the latest block number on the Ethereum Mainnet:
+
+```bash
+curl -X POST http://localhost:8080/mainnet \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
+```
+
 ## Metrics
 The load balancer exposes Prometheus metrics for monitoring. By default, these are served on `http://localhost:9101/metrics`. Metrics include:
 
