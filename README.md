@@ -1,8 +1,6 @@
 # StakeSquid EVM Loadbalancer
 
-This is a load balancer for EVM nodes that supports multiple networks and endpoints. 
-It monitors and balances the load across local, monitoring, and fallback nodes based on chainhead, latency, and load metrics. 
-It integrates with Prometheus for monitoring.
+StakeSquid EVM Load Balancer is a high-performance tool designed to efficiently distribute traffic across EVM nodes, ensuring optimal performance, redundancy, and high availability. It intelligently selects the best node based on real-time metrics like block height, latency, and server load, with automatic failover to backup nodes when needed. Featuring Prometheus integration for comprehensive monitoring, this load balancer provides a robust solution for querying Ethereum networks across multiple environments.
 
 ## Features
 - Load balancing across Ethereum nodes based on multiple factors (chainhead, latency, load)
