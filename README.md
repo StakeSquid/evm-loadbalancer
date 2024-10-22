@@ -157,16 +157,21 @@ networks:
   - name: "mainnet"             # Network name, used in request paths
     local_endpoints:            # List of local node endpoints (primary nodes)
       - "http://localhost:8545"
+      - "http://localhost:8546"
+      - "http://localhost:8547"
     monitoring_endpoints:       # (Optional) List of monitoring node endpoints
-      - "http://monitoring-node:8546"
+      - "http://monitoring-node:9545"
+      - "http://monitoring-node:9546"
     fallback_endpoints:         # (Optional) List of fallback node endpoints
-      - "http://fallback-node:8547"
+      - "http://fallback-node:9656"
+      - "http://fallback-node:9657"
     load_balance_priority:      # (Optional) Priority for load balancing: latency, load, chainhead
       - "latency"
       - "load"
-    load_period: 10             # (Optional) Load tracking period (in seconds)
-    local_poll_interval: "10s"  # Interval for polling local nodes for status
-    monitoring_poll_interval: "30s" # (Optional) Interval for polling monitoring nodes
+      - "chainhead"
+    load_period: 1             # (Optional) Load tracking period (in seconds)
+    local_poll_interval: "0.5s"  # Interval for polling local nodes for status
+    monitoring_poll_interval: "1s" # (Optional) Interval for polling monitoring nodes
     network_block_diff: 5       # Allowed block difference between network and node
     use_load_tracker: true      # (Optional) Enable or disable load tracking
     rpc_timeout: "5s"           # Timeout for RPC calls to nodes
@@ -180,7 +185,23 @@ networks:
     network_block_diff: 10
     rpc_timeout: "10s"
     rpc_retries: 5
+```
 
+## Minimal configuration
+```yaml
+port: "8080"                 
+log_level: "INFO"            
+log_rate_limit: 10s           
+metrics_port: "9101"
+networks:        
+  - name: "mainnet"            
+    local_endpoints:
+      - "http://localhost:8548"
+      - "http://localhost:9656"
+    local_poll_interval: "1s"
+    network_block_diff: 10
+    rpc_timeout: "10s"
+    rpc_retries: 5
 ```
 
 ## Running the Load Balancer
