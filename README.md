@@ -56,8 +56,8 @@ The core of the system's decision-making revolves around selecting the best node
 Failover is a key part of the system’s resilience. The load balancer categorizes nodes into three types:
 
 - **Local Endpoints**: These are the primary nodes, typically located in the same network environment as the balancer.
-- **Monitoring Endpoints** (optional): These are external nodes used for monitoring purposes, and as a backup in case local nodes become unavailable.
-- **Fallback Endpoints** (optional): These are the final fallback nodes in case both local and monitoring nodes are down or not in sync.
+- **Monitoring Endpoints** (optional): These are external nodes used for monitoring purposes.
+- **Fallback Endpoints** (optional): These are the final fallback nodes in case all local nodes are down or not in sync.
 
 The balancer will failover to monitoring or fallback nodes if:
 
@@ -76,6 +76,7 @@ Key metrics include:
 - **Chainhead (`loadbalancer_node_chainhead`)**: Monitors the current block number for each node.
 - **Best Endpoint (`loadbalancer_best_endpoint`)**: Indicates the currently selected node for a network.
 - **Request Count and Duration (`loadbalancer_requests_total`, `loadbalancer_request_duration_seconds`)**: Track the number of requests and how long they take to process.
+- **Blocks behind (`loadbalancer_node_blocks_behind `)**: Track the number of blocks behind for each endpoint relative to the chain tip.
 
 ### 5. Proxying Requests
 
