@@ -34,24 +34,27 @@ type Config struct {
 }
 
 type NetworkConfig struct {
-    Name                    string   `yaml:"name"`
-    LocalEndpoints          []string `yaml:"local_endpoints"`
-    MonitoringEndpoints     []string `yaml:"monitoring_endpoints"`
-    FallbackEndpoints       []string `yaml:"fallback_endpoints"`
-    LoadBalancePriority     []string `yaml:"load_balance_priority"`
-    LoadPeriod              int      `yaml:"load_period"`
-    LocalPollInterval       string   `yaml:"local_poll_interval"`
-    MonitoringPollInterval  string   `yaml:"monitoring_poll_interval"`
-    NetworkBlockDiff        int64    `yaml:"network_block_diff"`
-    UseLoadTracker          bool     `yaml:"use_load_tracker"`
-    RPCTimeout              string   `yaml:"rpc_timeout"`
-    RPCRetries              int      `yaml:"rpc_retries"`
+    Name                            string   `yaml:"name"`
+    LocalEndpoints                  []string `yaml:"local_endpoints"`
+    MonitoringEndpoints             []string `yaml:"monitoring_endpoints"`
+    FallbackEndpoints               []string `yaml:"fallback_endpoints"`
+    LoadBalancePriority             []string `yaml:"load_balance_priority"`
+    LoadPeriod                      int      `yaml:"load_period"`
+    LocalPollInterval               string   `yaml:"local_poll_interval"`
+    MonitoringPollInterval          string   `yaml:"monitoring_poll_interval"`
+    NetworkBlockDiff                int64    `yaml:"network_block_diff"`
+    UseLoadTracker                  bool     `yaml:"use_load_tracker"`
+    RPCTimeout                      string   `yaml:"rpc_timeout"`
+    RPCRetries                      int      `yaml:"rpc_retries"`
+    SwitchToFallbackEnabled         bool     `yaml:"switch_to_fallback_enabled"`
+    SwitchToFallbackBlockThreshold  int64    `yaml:"switch_to_fallback_block_threshold"`
 
     // Parsed durations
     LocalPollIntervalDuration      time.Duration `yaml:"-"`
     MonitoringPollIntervalDuration time.Duration `yaml:"-"`
     RPCTimeoutDuration             time.Duration `yaml:"-"`
 }
+
 
 type NodeStatus struct {
     Endpoint   string
@@ -378,14 +381,46 @@ func (lb *LoadBalancer) GetBestEndpoint(ns *NetworkStatus) string {
         }
     }
 
+    // Determine if we should skip local nodes
+    skipLocalNodes := false
+    allLocalNodesUnreachable := true
+    for _, node := range ns.LocalNodeStatuses {
+        if node.Chainhead != nil && node.Chainhead.Sign() > 0 {
+            allLocalNodesUnreachable = false
+            break
+        }
+    }
+
+    if allLocalNodesUnreachable {
+        lb.logRateLimited("INFO", "all_local_nodes_unreachable_"+ns.Config.Name, "All local nodes are unreachable for network %s. Switching to fallback nodes.", ns.Config.Name)
+        skipLocalNodes = true
+    } else if ns.Config.SwitchToFallbackEnabled {
+        chainDiff := new(big.Int).Sub(networkChainhead, localNetworkChainhead)
+        if chainDiff.Int64() > ns.Config.SwitchToFallbackBlockThreshold {
+            lb.logRateLimited("INFO", "local_nodes_behind_"+ns.Config.Name, "Local nodes are %d blocks behind network chainhead for network %s. Switching to fallback nodes.", chainDiff.Int64(), ns.Config.Name)
+            skipLocalNodes = true
+        }
+    }
+
     endpointTypes := []struct {
         nodes            []*NodeStatus
         description      string
         networkChainhead *big.Int
-    }{
-        {ns.LocalNodeStatuses, "local", localNetworkChainhead},
-        {ns.FallbackNodeStatuses, "fallback", networkChainhead},
+    }{}
+
+    if !skipLocalNodes {
+        endpointTypes = append(endpointTypes, struct {
+            nodes            []*NodeStatus
+            description      string
+            networkChainhead *big.Int
+        }{ns.LocalNodeStatuses, "local", localNetworkChainhead})
     }
+
+    endpointTypes = append(endpointTypes, struct {
+        nodes            []*NodeStatus
+        description      string
+        networkChainhead *big.Int
+    }{ns.FallbackNodeStatuses, "fallback", networkChainhead})
 
     for _, endpointType := range endpointTypes {
         nodesToConsider := endpointType.nodes
@@ -458,6 +493,7 @@ func (lb *LoadBalancer) GetBestEndpoint(ns *NetworkStatus) string {
     lb.logRateLimited("ERROR", "no_valid_endpoint_"+ns.Config.Name, "No valid endpoint selected for network %s", ns.Config.Name)
     return ""
 }
+
 
 func (lb *LoadBalancer) getValidEndpoints(nodes []*NodeStatus, networkChainhead *big.Int, networkBlockDiff int64) []*NodeStatus {
     validEndpoints := []*NodeStatus{}

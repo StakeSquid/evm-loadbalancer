@@ -140,6 +140,8 @@ For each network you want to monitor and balance across nodes:
 - `use_load_tracker`(optional): Whether to monitor server load (requires node exporters or similar setups).
 - `rpc_timeout`: Timeout duration for RPC calls.
 - `rpc_retries`: Number of retries for RPC requests.
+- `switch_to_fallback_enabled`(optional): Whether to switch to fallback nodes when falling behind chainhead.
+- `switch_to_fallback_block_threshold`(optional): Number of blocks behind before switching to fallback nodes.
 #### Note on Optional Parameters
 Parameters marked as **optional** can be omitted. The load balancer will function without them, using default behaviors.
 For example, if `monitoring_endpoints` or `fallback_endpoints` are not provided, the load balancer will rely solely on the `local_endpoints`.
@@ -154,28 +156,30 @@ metrics_port: "9101"           # Port for exposing Prometheus metrics
 
 # Define multiple networks that the load balancer will handle
 networks:
-  - name: "mainnet"             # Network name, used in request paths
-    local_endpoints:            # List of local node endpoints (primary nodes)
+  - name: "mainnet"                             # Network name, used in request paths
+    local_endpoints:                            # List of local node endpoints (primary nodes)
       - "http://localhost:8545"
       - "http://localhost:8546"
       - "http://localhost:8547"
-    monitoring_endpoints:       # (Optional) List of monitoring node endpoints
+    monitoring_endpoints:                       # (Optional) List of monitoring node endpoints
       - "http://monitoring-node:9545"
       - "http://monitoring-node:9546"
-    fallback_endpoints:         # (Optional) List of fallback node endpoints
+    fallback_endpoints:                         # (Optional) List of fallback node endpoints
       - "http://fallback-node:9656"
       - "http://fallback-node:9657"
-    load_balance_priority:      # (Optional) Priority for load balancing: latency, load, chainhead
+    load_balance_priority:                      # (Optional) Priority for load balancing: latency, load, chainhead
       - "latency"
       - "load"
       - "chainhead"
-    load_period: 1             # (Optional) Load tracking period (in seconds)
-    local_poll_interval: "0.5s"  # Interval for polling local nodes for status
-    monitoring_poll_interval: "1s" # (Optional) Interval for polling monitoring nodes
-    network_block_diff: 5       # Allowed block difference between network and node
-    use_load_tracker: true      # (Optional) Enable or disable load tracking
-    rpc_timeout: "5s"           # Timeout for RPC calls to nodes
-    rpc_retries: 3              # Number of retries for failed RPC calls
+    load_period: 1                              # (Optional) Load tracking period (in seconds)
+    local_poll_interval: "0.5s"                 # Interval for polling local nodes for status
+    monitoring_poll_interval: "1s"              # (Optional) Interval for polling monitoring nodes
+    network_block_diff: 5                       # Allowed block difference between network and node
+    use_load_tracker: true                      # (Optional) Enable or disable load tracking
+    rpc_timeout: "5s"                           # Timeout for RPC calls to nodes
+    rpc_retries: 3                              # Number of retries for failed RPC calls
+    switch_to_fallback_enabled: true            # (Optional) Enable or disable switching to fallback nodes when behind chainhead
+    switch_to_fallback_block_threshold: 10      # Number of blocks behind when switching to fallback nodes
 
   - name: "ropsten"             # Another network configuration (e.g., a testnet)
     local_endpoints:
