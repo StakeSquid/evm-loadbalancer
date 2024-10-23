@@ -373,7 +373,7 @@ func (lb *LoadBalancer) monitorNode(ns *NetworkStatus, node *NodeStatus, pollInt
 
         // Fetch server load if enabled and node is local
         if node.IsLocal && ns.Config.UseLoadTracker && node.PrometheusEndpoint != "" {
-            load, err := getServerLoad(node.PrometheusEndpoint)
+            load, err := getServerLoad(node.PrometheusEndpoint, ns.Config.LoadPeriod) // Pass the LoadPeriod here
             if err != nil {
                 lb.logRateLimited("ERROR", "load_error_"+node.RPCEndpoint, "Network %s: Failed to get load from %s: %v", ns.Config.Name, node.PrometheusEndpoint, err)
                 lb.errorCounter.WithLabelValues(ns.Config.Name, node.RPCEndpoint, "load_error").Inc()
@@ -677,7 +677,7 @@ func (lb *LoadBalancer) getReverseProxy(endpoint string, networkName string, pat
     return proxy
 }
 
-func getServerLoad(prometheusEndpoint string) (float64, error) {
+func getServerLoad(prometheusEndpoint string, loadPeriod int) (float64, error) {
     resp, err := http.Get(prometheusEndpoint)
     if err != nil {
         return 0.0, err
@@ -691,10 +691,24 @@ func getServerLoad(prometheusEndpoint string) (float64, error) {
         return 0.0, err
     }
     bodyString := string(bodyBytes)
-    // Parse the metrics to find node_load1
+    
+    // Select the appropriate metric name based on the LoadPeriod
+    var loadMetricName string
+    switch loadPeriod {
+    case 1:
+        loadMetricName = "node_load1"
+    case 5:
+        loadMetricName = "node_load5"
+    case 15:
+        loadMetricName = "node_load15"
+    default:
+        return 0.0, fmt.Errorf("invalid LoadPeriod: %d", loadPeriod)
+    }
+
+    // Parse the metrics to find the load metric
     lines := strings.Split(bodyString, "\n")
     for _, line := range lines {
-        if strings.HasPrefix(line, "node_load1 ") {
+        if strings.HasPrefix(line, loadMetricName+" ") {
             fields := strings.Fields(line)
             if len(fields) != 2 {
                 continue
@@ -706,7 +720,7 @@ func getServerLoad(prometheusEndpoint string) (float64, error) {
             return loadValue, nil
         }
     }
-    return 0.0, fmt.Errorf("node_load1 metric not found")
+    return 0.0, fmt.Errorf("%s metric not found", loadMetricName)
 }
 
 func main() {
