@@ -26,28 +26,28 @@ import (
 )
 
 type Config struct {
-    Port             string          `yaml:"port"`
-    LogLevel         string          `yaml:"log_level"`
-    LogRateLimit     time.Duration   `yaml:"log_rate_limit"`
-    Networks         []NetworkConfig `yaml:"networks"`
-    MetricsPort      string          `yaml:"metrics_port"`
+    Port         string          `yaml:"port"`
+    LogLevel     string          `yaml:"log_level"`
+    LogRateLimit time.Duration   `yaml:"log_rate_limit"`
+    Networks     []NetworkConfig `yaml:"networks"`
+    MetricsPort  string          `yaml:"metrics_port"`
 }
 
 type NetworkConfig struct {
-    Name                            string   `yaml:"name"`
-    LocalEndpoints                  []string `yaml:"local_endpoints"`
-    MonitoringEndpoints             []string `yaml:"monitoring_endpoints"`
-    FallbackEndpoints               []string `yaml:"fallback_endpoints"`
-    LoadBalancePriority             []string `yaml:"load_balance_priority"`
-    LoadPeriod                      int      `yaml:"load_period"`
-    LocalPollInterval               string   `yaml:"local_poll_interval"`
-    MonitoringPollInterval          string   `yaml:"monitoring_poll_interval"`
-    NetworkBlockDiff                int64    `yaml:"network_block_diff"`
-    UseLoadTracker                  bool     `yaml:"use_load_tracker"`
-    RPCTimeout                      string   `yaml:"rpc_timeout"`
-    RPCRetries                      int      `yaml:"rpc_retries"`
-    SwitchToFallbackEnabled         bool     `yaml:"switch_to_fallback_enabled"`
-    SwitchToFallbackBlockThreshold  int64    `yaml:"switch_to_fallback_block_threshold"`
+    Name                           string   `yaml:"name"`
+    LocalEndpoints                 []string `yaml:"local_endpoints"`
+    MonitoringEndpoints            []string `yaml:"monitoring_endpoints"`
+    FallbackEndpoints              []string `yaml:"fallback_endpoints"`
+    LoadBalancePriority            []string `yaml:"load_balance_priority"`
+    LoadPeriod                     int      `yaml:"load_period"`
+    LocalPollInterval              string   `yaml:"local_poll_interval"`
+    MonitoringPollInterval         string   `yaml:"monitoring_poll_interval"`
+    NetworkBlockDiff               int64    `yaml:"network_block_diff"`
+    UseLoadTracker                 bool     `yaml:"use_load_tracker"`
+    RPCTimeout                     string   `yaml:"rpc_timeout"`
+    RPCRetries                     int      `yaml:"rpc_retries"`
+    SwitchToFallbackEnabled        bool     `yaml:"switch_to_fallback_enabled"`
+    SwitchToFallbackBlockThreshold int64    `yaml:"switch_to_fallback_block_threshold"`
 
     // Parsed durations
     LocalPollIntervalDuration      time.Duration `yaml:"-"`
@@ -55,22 +55,22 @@ type NetworkConfig struct {
     RPCTimeoutDuration             time.Duration `yaml:"-"`
 }
 
-
 type NodeStatus struct {
-    Endpoint   string
-    Chainhead  *big.Int
-    Load       float64
-    Latency    time.Duration
-    IsLocal    bool
+    Endpoint     string
+    Chainhead    *big.Int
+    Load         float64
+    Latency      time.Duration
+    IsLocal      bool
+    BlocksBehind int64
 }
 
 type NetworkStatus struct {
-    Config                   NetworkConfig
-    LocalNodeStatuses        []*NodeStatus
-    MonitoringNodeStatuses   []*NodeStatus
-    FallbackNodeStatuses     []*NodeStatus
-    NetworkChainhead         *big.Int
-    Mutex                    sync.RWMutex
+    Config                 NetworkConfig
+    LocalNodeStatuses      []*NodeStatus
+    MonitoringNodeStatuses []*NodeStatus
+    FallbackNodeStatuses   []*NodeStatus
+    NetworkChainhead       *big.Int
+    Mutex                  sync.RWMutex
 }
 
 type LoadBalancer struct {
@@ -84,6 +84,7 @@ type LoadBalancer struct {
     // Prometheus metrics
     latencyGauge      *prometheus.GaugeVec
     chainheadGauge    *prometheus.GaugeVec
+    blocksBehindGauge *prometheus.GaugeVec
     errorCounter      *prometheus.CounterVec
     bestEndpointGauge *prometheus.GaugeVec
     requestCounter    *prometheus.CounterVec
@@ -176,6 +177,14 @@ func (lb *LoadBalancer) initMetrics() {
         []string{"network", "endpoint"},
     )
 
+    lb.blocksBehindGauge = prometheus.NewGaugeVec(
+        prometheus.GaugeOpts{
+            Name: "loadbalancer_node_blocks_behind",
+            Help: "Number of blocks a node is behind the network chainhead",
+        },
+        []string{"network", "endpoint"},
+    )
+
     lb.errorCounter = prometheus.NewCounterVec(
         prometheus.CounterOpts{
             Name: "loadbalancer_node_errors_total",
@@ -212,6 +221,7 @@ func (lb *LoadBalancer) initMetrics() {
     // Register only the custom metrics with the custom registry
     lb.promRegistry.MustRegister(lb.latencyGauge)
     lb.promRegistry.MustRegister(lb.chainheadGauge)
+    lb.promRegistry.MustRegister(lb.blocksBehindGauge)
     lb.promRegistry.MustRegister(lb.errorCounter)
     lb.promRegistry.MustRegister(lb.bestEndpointGauge)
     lb.promRegistry.MustRegister(lb.requestCounter)
@@ -330,9 +340,23 @@ func (lb *LoadBalancer) monitorNode(ns *NetworkStatus, node *NodeStatus, pollInt
         }
         ns.Mutex.Unlock()
 
+        // Compute blocks behind
+        ns.Mutex.RLock()
+        networkChainhead := new(big.Int).Set(ns.NetworkChainhead)
+        ns.Mutex.RUnlock()
+
+        blocksBehind := new(big.Int).Sub(networkChainhead, node.Chainhead).Int64()
+        if blocksBehind < 0 {
+            blocksBehind = 0
+        }
+        node.BlocksBehind = blocksBehind
+
+        lb.logRateLimited("DEBUG", "blocks_behind_"+node.Endpoint, "Network %s: Node %s is %d blocks behind", ns.Config.Name, node.Endpoint, blocksBehind)
+
         // Update Prometheus metrics
         lb.latencyGauge.WithLabelValues(ns.Config.Name, node.Endpoint).Set(latency.Seconds())
         lb.chainheadGauge.WithLabelValues(ns.Config.Name, node.Endpoint).Set(float64(chainhead.Int64()))
+        lb.blocksBehindGauge.WithLabelValues(ns.Config.Name, node.Endpoint).Set(float64(blocksBehind))
 
         time.Sleep(pollInterval)
     }
@@ -493,7 +517,6 @@ func (lb *LoadBalancer) GetBestEndpoint(ns *NetworkStatus) string {
     lb.logRateLimited("ERROR", "no_valid_endpoint_"+ns.Config.Name, "No valid endpoint selected for network %s", ns.Config.Name)
     return ""
 }
-
 
 func (lb *LoadBalancer) getValidEndpoints(nodes []*NodeStatus, networkChainhead *big.Int, networkBlockDiff int64) []*NodeStatus {
     validEndpoints := []*NodeStatus{}
