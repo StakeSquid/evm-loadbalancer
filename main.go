@@ -514,9 +514,9 @@ func (lb *LoadBalancer) GetBestEndpoint(ns *NetworkStatus) string {
                             selectionReason = fmt.Sprintf("lowest latency (%v)", lowestLatency)
                         }
                     }
-                } else if priority == "load" && node.IsLocal {
+                } else if priority == "load" {
                     for _, node := range validEndpoints {
-                        if node.Chainhead.Cmp(highestChainhead) == 0 && node.Load < lowestLoad {
+                        if node.IsLocal && node.Chainhead.Cmp(highestChainhead) == 0 && node.Load < lowestLoad {
                             lowestLoad = node.Load
                             bestEndpoint = node.RPCEndpoint
                             selectionReason = fmt.Sprintf("lowest load (%.2f)", lowestLoad)
@@ -525,6 +525,7 @@ func (lb *LoadBalancer) GetBestEndpoint(ns *NetworkStatus) string {
                 }
             }
         }
+        
 
         if bestEndpoint != "" {
             lb.logRateLimited("INFO", "best_endpoint_"+ns.Config.Name, "Best endpoint selected for network %s: %s (%s)", ns.Config.Name, bestEndpoint, selectionReason)
