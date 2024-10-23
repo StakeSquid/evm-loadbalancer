@@ -1,4 +1,4 @@
-# StakeSquid EVM Loadbalancer
+# StakeSquid EVM Load Balancer
 
 StakeSquid EVM Load Balancer is a high-performance tool designed to efficiently distribute traffic across EVM nodes, ensuring optimal performance, redundancy, and high availability. It intelligently selects the best node based on real-time metrics like block height, latency, and server load, with automatic failover to backup nodes when needed. Featuring Prometheus integration for comprehensive monitoring, this load balancer provides a robust solution for querying Ethereum networks across multiple environments.
 
@@ -13,7 +13,7 @@ StakeSquid EVM Load Balancer is a high-performance tool designed to efficiently 
 # How it works?
 ## Overview
 
-The StakeSquid EVM Loadbalancer is designed to efficiently manage requests to Ethereum nodes across multiple networks by balancing load, monitoring node health, and ensuring high availability through failover mechanisms. It continuously monitors nodes, collects metrics, and selects the best node for routing based on configurable factors such as latency, load, and chainhead synchronization. 
+The StakeSquid EVM Load Balancer is designed to efficiently manage requests to Ethereum nodes across multiple networks by balancing load, monitoring node health, and ensuring high availability through failover mechanisms. It continuously monitors nodes, collects metrics, and selects the best node for routing based on configurable factors such as latency, load, and chainhead synchronization.
 
 The core logic behind the load balancer is to provide a reliable and performant infrastructure for querying Ethereum nodes, even in the presence of node failures or network issues.
 
@@ -49,7 +49,7 @@ The core of the system's decision-making revolves around selecting the best node
    - If two or more nodes have the same chainhead, the balancer selects the one with the lowest latency or load, based on the priority defined in the configuration (`load_balance_priority`).
 
 4. **Local Node Prioritization**: 
-   - If a local node (i.e., a node in the `local_endpoints`) is up-to-date and responsive, it is generally prioritized over monitoring or fallback nodes.
+   - If a local node (i.e., a node in the `local_nodes`) is up-to-date and responsive, it is generally prioritized over monitoring or fallback nodes.
 
 ### 3. Failover Mechanism
 
@@ -120,89 +120,96 @@ go build -o bin/loadbalancer main.go
 This will generate the `loadbalancer` executable in the `bin` directory.
 
 ## Configuration
-The load balancer is configured via a YAML file. A sample configuration file (config.yaml) is provided in the repository. The key configuration parameters include:
+The load balancer is configured via a YAML file. A sample configuration file (config.yaml) is provided in the repository. Key configuration parameters include:
+
 ### Main Configurations
 - `port`: The port on which the load balancer listens for incoming requests.
-- `log_level`: Logging verbosity. Can be ERROR, INFO, or DEBUG.
-- `log_rate_limit`: Time duration between log messages to prevent excessive logging.
+- `log_level`: Logging verbosity. Options are ERROR, INFO, or DEBUG.
+- `log_rate_limit`: Time duration between repeated log messages to prevent excessive logging (e.g., 10s).
 - `metrics_port`: Port on which Prometheus metrics are served.
+
 ### Network Configuration
 For each network you want to monitor and balance across nodes:
 
 - `name`: A unique name for the network.
-- `local_endpoints`: List of local Ethereum RPC endpoints.
-- `monitoring_endpoints`(optional): List of external monitoring Ethereum RPC endpoints.
-- `fallback_endpoints`(optional): List of fallback Ethereum RPC endpoints.
-- `load_balance_priority` (optional): A list of load-balancing criteria. Options are latency, load, and chainhead.
-- `load_period`(optional): Time window to measure server load.
-- `local_poll_interval`: How often to poll local nodes (in Go duration format, e.g., 1s, 5m).
-- `monitoring_poll_interval`(optional): How often to poll monitoring nodes.
+- `local_nodes`: List of local Ethereum RPC endpoints, each defined by:
+    - `rpc_endpoint`: The URL of the Ethereum RPC node.
+    - `prometheus_endpoint` (optional): URL to fetch server load metrics from Prometheus, used if load tracking is enabled.
+- `monitoring_nodes` (optional): List of external monitoring Ethereum RPC endpoints.
+- `fallback_nodes` (optional): List of fallback Ethereum RPC endpoints.
+- `load_balance_priority` (optional): A list of load-balancing criteria in order of priority. Options are latency, load, and chainhead.
+- `load_period` (optional): Time window in seconds to measure server load.
+- `local_poll_interval`: How often to poll local nodes for status (in Go duration format, e.g., 1s, 5m).
+- `monitoring_poll_interval` (optional): How often to poll monitoring nodes.
 - `network_block_diff`: Max block difference allowed between nodes and the network chainhead.
-- `use_load_tracker`(optional): Whether to monitor server load (requires node exporters or similar setups).
+- `use_load_tracker` (optional): Whether to monitor server load (requires Prometheus or similar setups).
 - `rpc_timeout`: Timeout duration for RPC calls.
 - `rpc_retries`: Number of retries for RPC requests.
-- `switch_to_fallback_enabled`(optional): Whether to switch to fallback nodes when falling behind chainhead.
-- `switch_to_fallback_block_threshold`(optional): Number of blocks behind before switching to fallback nodes.
+- `switch_to_fallback_enabled` (optional): Whether to switch to fallback nodes when falling behind chainhead.
+- `switch_to_fallback_block_threshold` (optional): Number of blocks behind before switching to fallback nodes.
 #### Note on Optional Parameters
-Parameters marked as **optional** can be omitted. The load balancer will function without them, using default behaviors.
-For example, if `monitoring_endpoints` or `fallback_endpoints` are not provided, the load balancer will rely solely on the `local_endpoints`.
-If `load_balance_priority` is not specified, the default priority is to use the chainhead for node selection.
+Parameters marked as optional can be omitted. The load balancer will function without them, using default behaviors.
+For example, if `monitoring_nodes` or `fallback_nodes` are not provided, the load balancer will rely solely on the `local_nodes`.
+If `load_balance_priority` is not specified, the default behavior is to use the chainhead for node selection.
 
 ## Example configuration
 ```yaml
-port: "8080"                   # Port on which the load balancer will listen for incoming requests
+port: "8080"                   # Port on which the load balancer listens for incoming requests
 log_level: "INFO"              # Logging level: DEBUG, INFO, or ERROR
-log_rate_limit: 10s            # Rate limit for logging repeated messages
+log_rate_limit: "10s"          # Rate limit for logging repeated messages
 metrics_port: "9101"           # Port for exposing Prometheus metrics
 
 # Define multiple networks that the load balancer will handle
 networks:
-  - name: "mainnet"                             # Network name, used in request paths
-    local_endpoints:                            # List of local node endpoints (primary nodes)
-      - "http://localhost:8545"
-      - "http://localhost:8546"
-      - "http://localhost:8547"
-    monitoring_endpoints:                       # (Optional) List of monitoring node endpoints
-      - "http://monitoring-node:9545"
-      - "http://monitoring-node:9546"
-    fallback_endpoints:                         # (Optional) List of fallback node endpoints
-      - "http://fallback-node:9656"
-      - "http://fallback-node:9657"
-    load_balance_priority:                      # (Optional) Priority for load balancing: latency, load, chainhead
+  - name: "mainnet"                           # Network name, used in request paths
+    local_nodes:                              # List of local node RPC and Prometheus endpoints
+      - rpc_endpoint: "http://mainnet-1:8545"
+        prometheus_endpoint: "http://mainnet-1:9100/metrics"
+      - rpc_endpoint: "http://mainnet-2:8545"
+        prometheus_endpoint: "http://mainnet-2:9100/metrics"
+      - rpc_endpoint: "http://mainnet-3:8545"
+        prometheus_endpoint: "http://mainnet-3:9100/metrics"
+    monitoring_nodes:                         # (Optional) List of external monitoring node RPC endpoints
+      - rpc_endpoint: "http://monitoring-node-1:9545"
+    fallback_nodes:                           # (Optional) List of fallback node RPC endpoints
+      - rpc_endpoint: "http://fallback-node-1:9656"
+      - rpc_endpoint: "http://fallback-node-2:9657"
+    load_balance_priority:                    # (Optional) Priority for load balancing: latency, load, chainhead
       - "latency"
       - "load"
       - "chainhead"
-    load_period: 1                              # (Optional) Load tracking period (in seconds)
-    local_poll_interval: "0.5s"                 # Interval for polling local nodes for status
-    monitoring_poll_interval: "1s"              # (Optional) Interval for polling monitoring nodes
-    network_block_diff: 5                       # Allowed block difference between network and node
-    use_load_tracker: true                      # (Optional) Enable or disable load tracking
-    rpc_timeout: "5s"                           # Timeout for RPC calls to nodes
-    rpc_retries: 3                              # Number of retries for failed RPC calls
-    switch_to_fallback_enabled: true            # (Optional) Enable or disable switching to fallback nodes when behind chainhead
-    switch_to_fallback_block_threshold: 10      # Number of blocks behind when switching to fallback nodes
+    load_period: 1                            # (Optional) Load tracking period (in seconds)
+    local_poll_interval: "0.5s"               # Poll interval for local nodes
+    monitoring_poll_interval: "1s"            # (Optional) Poll interval for monitoring nodes
+    network_block_diff: 5                     # Max allowed block difference
+    use_load_tracker: true                    # (Optional) Enable load tracking
+    rpc_timeout: "5s"                         # Timeout for RPC calls
+    rpc_retries: 3                            # Number of retries for failed RPC calls
+    switch_to_fallback_enabled: true          # (Optional) Enable fallback nodes
+    switch_to_fallback_block_threshold: 10    # Blocks behind to trigger fallback
 
-  - name: "ropsten"             # Another network configuration (e.g., a testnet)
-    local_endpoints:
-      - "http://localhost:8548"
-    # monitoring_endpoints and fallback_endpoints can be omitted
+  - name: "ropsten"                           # Another network configuration (e.g., a testnet)
+    local_nodes:
+      - rpc_endpoint: "http://localhost:8548"
+    # monitoring_nodes and fallback_nodes can be omitted
     local_poll_interval: "15s"
     network_block_diff: 10
     rpc_timeout: "10s"
     rpc_retries: 5
+
 ```
 
 ## Minimal configuration
 ```yaml
 port: "8080"                 
 log_level: "INFO"            
-log_rate_limit: 10s           
+log_rate_limit: "10s"          
 metrics_port: "9101"
 networks:        
   - name: "mainnet"            
-    local_endpoints:
-      - "http://localhost:8548"
-      - "http://localhost:9656"
+    local_nodes:
+      - rpc_endpoint: "http://localhost:8548"
+      - rpc_endpoint: "http://localhost:9656"
     local_poll_interval: "1s"
     network_block_diff: 10
     rpc_timeout: "10s"
@@ -256,6 +263,7 @@ The load balancer exposes Prometheus metrics for monitoring. By default, these a
 - `loadbalancer_requests_total`: Total number of requests handled.
 - `loadbalancer_request_duration_seconds`: Histogram of request durations.
 - `loadbalancer_best_endpoint`: Tracks the best endpoint chosen for each network.
+- `loadbalancer_node_blocks_behind`: Tracks the number of blocks behind for each network.
 
 ## Monitoring
 To monitor the load balancer and nodes, configure your Prometheus server to scrape the /metrics endpoint:

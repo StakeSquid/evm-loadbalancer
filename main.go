@@ -15,6 +15,7 @@ import (
     "net/url"
     "os"
     "path"
+    "strconv"
     "strings"
     "sync"
     "time"
@@ -33,21 +34,26 @@ type Config struct {
     MetricsPort  string          `yaml:"metrics_port"`
 }
 
+type NodeConfig struct {
+    RPCEndpoint        string `yaml:"rpc_endpoint"`
+    PrometheusEndpoint string `yaml:"prometheus_endpoint,omitempty"`
+}
+
 type NetworkConfig struct {
-    Name                           string   `yaml:"name"`
-    LocalEndpoints                 []string `yaml:"local_endpoints"`
-    MonitoringEndpoints            []string `yaml:"monitoring_endpoints"`
-    FallbackEndpoints              []string `yaml:"fallback_endpoints"`
-    LoadBalancePriority            []string `yaml:"load_balance_priority"`
-    LoadPeriod                     int      `yaml:"load_period"`
-    LocalPollInterval              string   `yaml:"local_poll_interval"`
-    MonitoringPollInterval         string   `yaml:"monitoring_poll_interval"`
-    NetworkBlockDiff               int64    `yaml:"network_block_diff"`
-    UseLoadTracker                 bool     `yaml:"use_load_tracker"`
-    RPCTimeout                     string   `yaml:"rpc_timeout"`
-    RPCRetries                     int      `yaml:"rpc_retries"`
-    SwitchToFallbackEnabled        bool     `yaml:"switch_to_fallback_enabled"`
-    SwitchToFallbackBlockThreshold int64    `yaml:"switch_to_fallback_block_threshold"`
+    Name                           string       `yaml:"name"`
+    LocalNodes                     []NodeConfig `yaml:"local_nodes"`
+    MonitoringNodes                []NodeConfig `yaml:"monitoring_nodes"`
+    FallbackNodes                  []NodeConfig `yaml:"fallback_nodes"`
+    LoadBalancePriority            []string     `yaml:"load_balance_priority"`
+    LoadPeriod                     int          `yaml:"load_period"`
+    LocalPollInterval              string       `yaml:"local_poll_interval"`
+    MonitoringPollInterval         string       `yaml:"monitoring_poll_interval"`
+    NetworkBlockDiff               int64        `yaml:"network_block_diff"`
+    UseLoadTracker                 bool         `yaml:"use_load_tracker"`
+    RPCTimeout                     string       `yaml:"rpc_timeout"`
+    RPCRetries                     int          `yaml:"rpc_retries"`
+    SwitchToFallbackEnabled        bool         `yaml:"switch_to_fallback_enabled"`
+    SwitchToFallbackBlockThreshold int64        `yaml:"switch_to_fallback_block_threshold"`
 
     // Parsed durations
     LocalPollIntervalDuration      time.Duration `yaml:"-"`
@@ -56,12 +62,13 @@ type NetworkConfig struct {
 }
 
 type NodeStatus struct {
-    Endpoint     string
-    Chainhead    *big.Int
-    Load         float64
-    Latency      time.Duration
-    IsLocal      bool
-    BlocksBehind int64
+    RPCEndpoint        string
+    PrometheusEndpoint string
+    Chainhead          *big.Int
+    Load               float64
+    Latency            time.Duration
+    IsLocal            bool
+    BlocksBehind       int64
 }
 
 type NetworkStatus struct {
@@ -85,6 +92,7 @@ type LoadBalancer struct {
     latencyGauge      *prometheus.GaugeVec
     chainheadGauge    *prometheus.GaugeVec
     blocksBehindGauge *prometheus.GaugeVec
+    loadGauge         *prometheus.GaugeVec
     errorCounter      *prometheus.CounterVec
     bestEndpointGauge *prometheus.GaugeVec
     requestCounter    *prometheus.CounterVec
@@ -109,32 +117,33 @@ func logMessage(globalLevel string, level string, format string, args ...interfa
 func NewLoadBalancer(config Config) *LoadBalancer {
     networks := make(map[string]*NetworkStatus)
     for _, networkConfig := range config.Networks {
-        localNodeStatuses := make([]*NodeStatus, len(networkConfig.LocalEndpoints))
-        for i, endpoint := range networkConfig.LocalEndpoints {
+        localNodeStatuses := make([]*NodeStatus, len(networkConfig.LocalNodes))
+        for i, nodeConfig := range networkConfig.LocalNodes {
             localNodeStatuses[i] = &NodeStatus{
-                Endpoint:  endpoint,
-                Chainhead: big.NewInt(0),
-                Load:      0,
-                Latency:   0,
-                IsLocal:   true,
+                RPCEndpoint:        nodeConfig.RPCEndpoint,
+                PrometheusEndpoint: nodeConfig.PrometheusEndpoint,
+                Chainhead:          big.NewInt(0),
+                Load:               0,
+                Latency:            0,
+                IsLocal:            true,
             }
         }
 
-        monitoringNodeStatuses := make([]*NodeStatus, len(networkConfig.MonitoringEndpoints))
-        for i, endpoint := range networkConfig.MonitoringEndpoints {
+        monitoringNodeStatuses := make([]*NodeStatus, len(networkConfig.MonitoringNodes))
+        for i, nodeConfig := range networkConfig.MonitoringNodes {
             monitoringNodeStatuses[i] = &NodeStatus{
-                Endpoint:  endpoint,
-                Chainhead: big.NewInt(0),
-                IsLocal:   false,
+                RPCEndpoint: nodeConfig.RPCEndpoint,
+                Chainhead:   big.NewInt(0),
+                IsLocal:     false,
             }
         }
 
-        fallbackNodeStatuses := make([]*NodeStatus, len(networkConfig.FallbackEndpoints))
-        for i, endpoint := range networkConfig.FallbackEndpoints {
+        fallbackNodeStatuses := make([]*NodeStatus, len(networkConfig.FallbackNodes))
+        for i, nodeConfig := range networkConfig.FallbackNodes {
             fallbackNodeStatuses[i] = &NodeStatus{
-                Endpoint:  endpoint,
-                Chainhead: big.NewInt(0),
-                IsLocal:   false,
+                RPCEndpoint: nodeConfig.RPCEndpoint,
+                Chainhead:   big.NewInt(0),
+                IsLocal:     false,
             }
         }
 
@@ -166,7 +175,7 @@ func (lb *LoadBalancer) initMetrics() {
             Name: "loadbalancer_node_latency_seconds",
             Help: "Latency to nodes",
         },
-        []string{"network", "endpoint"},
+        []string{"network", "rpc_endpoint"},
     )
 
     lb.chainheadGauge = prometheus.NewGaugeVec(
@@ -174,7 +183,7 @@ func (lb *LoadBalancer) initMetrics() {
             Name: "loadbalancer_node_chainhead",
             Help: "Chainhead of nodes",
         },
-        []string{"network", "endpoint"},
+        []string{"network", "rpc_endpoint"},
     )
 
     lb.blocksBehindGauge = prometheus.NewGaugeVec(
@@ -182,7 +191,15 @@ func (lb *LoadBalancer) initMetrics() {
             Name: "loadbalancer_node_blocks_behind",
             Help: "Number of blocks a node is behind the network chainhead",
         },
-        []string{"network", "endpoint"},
+        []string{"network", "rpc_endpoint"},
+    )
+
+    lb.loadGauge = prometheus.NewGaugeVec(
+        prometheus.GaugeOpts{
+            Name: "loadbalancer_node_load",
+            Help: "Load of nodes",
+        },
+        []string{"network", "rpc_endpoint"},
     )
 
     lb.errorCounter = prometheus.NewCounterVec(
@@ -190,7 +207,7 @@ func (lb *LoadBalancer) initMetrics() {
             Name: "loadbalancer_node_errors_total",
             Help: "Total errors encountered",
         },
-        []string{"network", "endpoint", "type"},
+        []string{"network", "rpc_endpoint", "type"},
     )
 
     lb.bestEndpointGauge = prometheus.NewGaugeVec(
@@ -198,7 +215,7 @@ func (lb *LoadBalancer) initMetrics() {
             Name: "loadbalancer_best_endpoint",
             Help: "Indicates the best endpoint selected (1 for selected, 0 otherwise)",
         },
-        []string{"network", "endpoint"},
+        []string{"network", "rpc_endpoint"},
     )
 
     lb.requestCounter = prometheus.NewCounterVec(
@@ -222,6 +239,7 @@ func (lb *LoadBalancer) initMetrics() {
     lb.promRegistry.MustRegister(lb.latencyGauge)
     lb.promRegistry.MustRegister(lb.chainheadGauge)
     lb.promRegistry.MustRegister(lb.blocksBehindGauge)
+    lb.promRegistry.MustRegister(lb.loadGauge)
     lb.promRegistry.MustRegister(lb.errorCounter)
     lb.promRegistry.MustRegister(lb.bestEndpointGauge)
     lb.promRegistry.MustRegister(lb.requestCounter)
@@ -311,10 +329,10 @@ func (lb *LoadBalancer) startEndpointSelection(ns *NetworkStatus) {
 
 func (lb *LoadBalancer) monitorNode(ns *NetworkStatus, node *NodeStatus, pollInterval time.Duration) {
     for {
-        client, err := rpc.Dial(node.Endpoint)
+        client, err := rpc.Dial(node.RPCEndpoint)
         if err != nil {
-            lb.logRateLimited("ERROR", "rpc_dial_error_"+node.Endpoint, "Network %s: Failed to dial endpoint %s: %v", ns.Config.Name, node.Endpoint, err)
-            lb.errorCounter.WithLabelValues(ns.Config.Name, node.Endpoint, "dial_error").Inc()
+            lb.logRateLimited("ERROR", "rpc_dial_error_"+node.RPCEndpoint, "Network %s: Failed to dial RPC endpoint %s: %v", ns.Config.Name, node.RPCEndpoint, err)
+            lb.errorCounter.WithLabelValues(ns.Config.Name, node.RPCEndpoint, "dial_error").Inc()
             time.Sleep(pollInterval)
             continue
         }
@@ -323,14 +341,14 @@ func (lb *LoadBalancer) monitorNode(ns *NetworkStatus, node *NodeStatus, pollInt
         chainhead, latency, err := lb.getChainheadWithRetries(client, ns.Config.RPCTimeoutDuration, ns.Config.RPCRetries)
         client.Close()
         if err != nil {
-            lb.logRateLimited("ERROR", "chainhead_error_"+node.Endpoint, "Network %s: Failed to get chainhead from %s: %v", ns.Config.Name, node.Endpoint, err)
-            lb.errorCounter.WithLabelValues(ns.Config.Name, node.Endpoint, "chainhead_error").Inc()
+            lb.logRateLimited("ERROR", "chainhead_error_"+node.RPCEndpoint, "Network %s: Failed to get chainhead from %s: %v", ns.Config.Name, node.RPCEndpoint, err)
+            lb.errorCounter.WithLabelValues(ns.Config.Name, node.RPCEndpoint, "chainhead_error").Inc()
             time.Sleep(pollInterval)
             continue
         } else {
             node.Chainhead = chainhead
             node.Latency = latency
-            lb.logRateLimited("DEBUG", "chainhead_update_"+node.Endpoint, "Network %s: Updated chainhead for endpoint %s: %s, latency: %v", ns.Config.Name, node.Endpoint, chainhead.String(), latency)
+            lb.logRateLimited("DEBUG", "chainhead_update_"+node.RPCEndpoint, "Network %s: Updated chainhead for RPC endpoint %s: %s, latency: %v", ns.Config.Name, node.RPCEndpoint, chainhead.String(), latency)
         }
 
         // Update network chainhead
@@ -351,12 +369,25 @@ func (lb *LoadBalancer) monitorNode(ns *NetworkStatus, node *NodeStatus, pollInt
         }
         node.BlocksBehind = blocksBehind
 
-        lb.logRateLimited("DEBUG", "blocks_behind_"+node.Endpoint, "Network %s: Node %s is %d blocks behind", ns.Config.Name, node.Endpoint, blocksBehind)
+        lb.logRateLimited("DEBUG", "blocks_behind_"+node.RPCEndpoint, "Network %s: Node %s is %d blocks behind", ns.Config.Name, node.RPCEndpoint, blocksBehind)
+
+        // Fetch server load if enabled and node is local
+        if node.IsLocal && ns.Config.UseLoadTracker && node.PrometheusEndpoint != "" {
+            load, err := getServerLoad(node.PrometheusEndpoint)
+            if err != nil {
+                lb.logRateLimited("ERROR", "load_error_"+node.RPCEndpoint, "Network %s: Failed to get load from %s: %v", ns.Config.Name, node.PrometheusEndpoint, err)
+                lb.errorCounter.WithLabelValues(ns.Config.Name, node.RPCEndpoint, "load_error").Inc()
+            } else {
+                node.Load = load
+                lb.logRateLimited("DEBUG", "load_update_"+node.RPCEndpoint, "Network %s: Updated load for RPC endpoint %s: %.2f", ns.Config.Name, node.RPCEndpoint, load)
+                lb.loadGauge.WithLabelValues(ns.Config.Name, node.RPCEndpoint).Set(load)
+            }
+        }
 
         // Update Prometheus metrics
-        lb.latencyGauge.WithLabelValues(ns.Config.Name, node.Endpoint).Set(latency.Seconds())
-        lb.chainheadGauge.WithLabelValues(ns.Config.Name, node.Endpoint).Set(float64(chainhead.Int64()))
-        lb.blocksBehindGauge.WithLabelValues(ns.Config.Name, node.Endpoint).Set(float64(blocksBehind))
+        lb.latencyGauge.WithLabelValues(ns.Config.Name, node.RPCEndpoint).Set(latency.Seconds())
+        lb.chainheadGauge.WithLabelValues(ns.Config.Name, node.RPCEndpoint).Set(float64(chainhead.Int64()))
+        lb.blocksBehindGauge.WithLabelValues(ns.Config.Name, node.RPCEndpoint).Set(float64(blocksBehind))
 
         time.Sleep(pollInterval)
     }
@@ -461,12 +492,12 @@ func (lb *LoadBalancer) GetBestEndpoint(ns *NetworkStatus) string {
         for _, node := range validEndpoints {
             if node.Chainhead.Cmp(highestChainhead) > 0 {
                 highestChainhead = node.Chainhead
-                bestEndpoint = node.Endpoint
+                bestEndpoint = node.RPCEndpoint
                 selectionReason = fmt.Sprintf("highest chainhead (%s)", highestChainhead.String())
             } else if node.Chainhead.Cmp(highestChainhead) == 0 {
                 if node.IsLocal {
                     // Prioritize local nodes
-                    bestEndpoint = node.Endpoint
+                    bestEndpoint = node.RPCEndpoint
                     selectionReason = "local node preferred"
                 }
             }
@@ -479,15 +510,15 @@ func (lb *LoadBalancer) GetBestEndpoint(ns *NetworkStatus) string {
                     for _, node := range validEndpoints {
                         if node.Chainhead.Cmp(highestChainhead) == 0 && node.Latency < lowestLatency {
                             lowestLatency = node.Latency
-                            bestEndpoint = node.Endpoint
+                            bestEndpoint = node.RPCEndpoint
                             selectionReason = fmt.Sprintf("lowest latency (%v)", lowestLatency)
                         }
                     }
-                } else if priority == "load" {
+                } else if priority == "load" && node.IsLocal {
                     for _, node := range validEndpoints {
                         if node.Chainhead.Cmp(highestChainhead) == 0 && node.Load < lowestLoad {
                             lowestLoad = node.Load
-                            bestEndpoint = node.Endpoint
+                            bestEndpoint = node.RPCEndpoint
                             selectionReason = fmt.Sprintf("lowest load (%.2f)", lowestLoad)
                         }
                     }
@@ -501,10 +532,10 @@ func (lb *LoadBalancer) GetBestEndpoint(ns *NetworkStatus) string {
             // Update Prometheus metrics
             // Reset all endpoints to 0
             for _, node := range ns.LocalNodeStatuses {
-                lb.bestEndpointGauge.WithLabelValues(ns.Config.Name, node.Endpoint).Set(0)
+                lb.bestEndpointGauge.WithLabelValues(ns.Config.Name, node.RPCEndpoint).Set(0)
             }
             for _, node := range ns.FallbackNodeStatuses {
-                lb.bestEndpointGauge.WithLabelValues(ns.Config.Name, node.Endpoint).Set(0)
+                lb.bestEndpointGauge.WithLabelValues(ns.Config.Name, node.RPCEndpoint).Set(0)
             }
             // Set the selected endpoint to 1
             lb.bestEndpointGauge.WithLabelValues(ns.Config.Name, bestEndpoint).Set(1)
@@ -582,7 +613,7 @@ func (lb *LoadBalancer) getReverseProxy(endpoint string, networkName string, pat
 
     parsedURL, err := url.Parse(endpoint)
     if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
-        lb.logRateLimited("ERROR", "invalid_endpoint_url_"+networkName, "Invalid endpoint URL: %s", endpoint)
+        lb.logRateLimited("ERROR", "invalid_endpoint_url_"+networkName, "Invalid RPC endpoint URL: %s", endpoint)
         lb.errorCounter.WithLabelValues(networkName, endpoint, "invalid_url").Inc()
         return nil
     }
@@ -645,9 +676,36 @@ func (lb *LoadBalancer) getReverseProxy(endpoint string, networkName string, pat
     return proxy
 }
 
-func getServerLoad(nodeExporterEndpoint string, loadPeriod int) (float64, error) {
-    // For simplicity, return a dummy load
-    return 0.0, nil
+func getServerLoad(prometheusEndpoint string) (float64, error) {
+    resp, err := http.Get(prometheusEndpoint)
+    if err != nil {
+        return 0.0, err
+    }
+    defer resp.Body.Close()
+    if resp.StatusCode != http.StatusOK {
+        return 0.0, fmt.Errorf("received non-200 response code: %d", resp.StatusCode)
+    }
+    bodyBytes, err := ioutil.ReadAll(resp.Body)
+    if err != nil {
+        return 0.0, err
+    }
+    bodyString := string(bodyBytes)
+    // Parse the metrics to find node_load1
+    lines := strings.Split(bodyString, "\n")
+    for _, line := range lines {
+        if strings.HasPrefix(line, "node_load1 ") {
+            fields := strings.Fields(line)
+            if len(fields) != 2 {
+                continue
+            }
+            loadValue, err := strconv.ParseFloat(fields[1], 64)
+            if err != nil {
+                continue
+            }
+            return loadValue, nil
+        }
+    }
+    return 0.0, fmt.Errorf("node_load1 metric not found")
 }
 
 func main() {
