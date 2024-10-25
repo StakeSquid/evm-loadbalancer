@@ -420,18 +420,19 @@ func (lb *LoadBalancer) GetBestEndpoint(ns *NetworkStatus) string {
 
     var bestEndpoint string
     var selectionReason string
+    highestChainhead := big.NewInt(0)
+    lowestLatency := time.Duration(1<<63 - 1) // Max duration
+    lowestLoad := float64(1<<63 - 1)          // Arbitrary large number
 
     ns.Mutex.RLock()
     networkChainhead := new(big.Int).Set(ns.NetworkChainhead)
     ns.Mutex.RUnlock()
 
-    if networkChainhead == nil || networkChainhead.Sign() == 0 {
-        // Initialize networkChainhead to the highest node chainhead
-        networkChainhead = big.NewInt(0)
-        for _, node := range append(ns.LocalNodeStatuses, ns.FallbackNodeStatuses...) {
-            if node.Chainhead != nil && node.Chainhead.Cmp(networkChainhead) > 0 {
-                networkChainhead = node.Chainhead
-            }
+    // Compute localNetworkChainhead
+    localNetworkChainhead := big.NewInt(0)
+    for _, node := range ns.LocalNodeStatuses {
+        if node.Chainhead != nil && node.Chainhead.Cmp(localNetworkChainhead) > 0 {
+            localNetworkChainhead = node.Chainhead
         }
     }
 
@@ -555,14 +556,7 @@ func (lb *LoadBalancer) getValidEndpoints(nodes []*NodeStatus, networkChainhead 
         if node.Chainhead == nil {
             continue
         }
-        var blockDiff int64
-        if networkChainhead != nil && networkChainhead.Sign() > 0 {
-            diff := new(big.Int).Sub(networkChainhead, node.Chainhead)
-            blockDiff = diff.Abs(diff).Int64()
-        } else {
-            // If networkChainhead is not set, consider all nodes valid
-            blockDiff = 0
-        }
+        blockDiff := new(big.Int).Sub(networkChainhead, node.Chainhead).Int64()
         if blockDiff > networkBlockDiff {
             continue // Node is too far behind
         }
@@ -570,7 +564,6 @@ func (lb *LoadBalancer) getValidEndpoints(nodes []*NodeStatus, networkChainhead 
     }
     return validEndpoints
 }
-
 
 func (lb *LoadBalancer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
     startTime := time.Now()
@@ -643,19 +636,20 @@ func (lb *LoadBalancer) getReverseProxy(endpoint string, networkName string, pat
 
     // Customize the director function
     proxy.Director = func(req *http.Request) {
+        // Set the scheme and host
         req.URL.Scheme = parsedURL.Scheme
         req.URL.Host = parsedURL.Host
-        req.Host = parsedURL.Host
-    
-        // Remove the network name from the request path
-        originalPath := req.URL.Path
-        if strings.HasPrefix(originalPath, "/" + networkName) {
-            req.URL.Path = strings.TrimPrefix(originalPath, "/" + networkName)
-            if req.URL.Path == "" {
-                req.URL.Path = "/"
-            }
+
+        // Modify the path to include any path segments after the network name
+        if len(pathSegments) > 1 {
+            req.URL.Path = path.Join(parsedURL.Path, strings.Join(pathSegments[1:], "/"))
+        } else {
+            req.URL.Path = parsedURL.Path
         }
-    
+
+        // Set the Host header to the backend host
+        req.Host = parsedURL.Host
+
         // Ensure the request body can be read multiple times
         if req.GetBody == nil && req.Body != nil {
             bodyBytes, err := ioutil.ReadAll(req.Body)
@@ -667,7 +661,6 @@ func (lb *LoadBalancer) getReverseProxy(endpoint string, networkName string, pat
             }
         }
     }
-    
 
     // Optionally, capture and log errors from the backend
     proxy.ErrorHandler = func(w http.ResponseWriter, req *http.Request, err error) {
