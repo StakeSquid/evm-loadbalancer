@@ -70,6 +70,7 @@ Key metrics include:
 - **Best Endpoint (`loadbalancer_best_endpoint`)**: Indicates the currently selected node for a network.
 - **Request Count and Duration (`loadbalancer_requests_total`, `loadbalancer_request_duration_seconds`)**: Track the number of requests and how long they take to process.
 - **Blocks behind (`loadbalancer_node_blocks_behind `)**: Track the number of blocks behind for each endpoint relative to the chain tip.
+- **Requests by IP (`loadbalancer_requests_by_ip_total`)**: Track the number of requests by the source IP address.
 
 ### 5. Proxying Requests
 
@@ -149,7 +150,7 @@ If `load_balance_priority` is not specified, the default behavior is to use the 
 ## Example configuration
 ```yaml
 port: "8080"                   # Port on which the load balancer listens for incoming requests
-log_level: "INFO"              # Logging level: DEBUG, INFO, or ERROR
+log_level: "INFO"              # Logging level: TRACE, DEBUG, INFO, or ERROR
 log_rate_limit: "10s"          # Rate limit for logging repeated messages
 metrics_port: "9101"           # Port for exposing Prometheus metrics
 
@@ -359,6 +360,7 @@ The load balancer exposes Prometheus metrics for monitoring. By default, these a
 - `loadbalancer_request_duration_seconds`: Histogram of request durations.
 - `loadbalancer_best_endpoint`: Tracks the best endpoint chosen for each network.
 - `loadbalancer_node_blocks_behind`: Tracks the number of blocks behind for each network.
+- `loadbalancer_requests_by_ip_total`: Total number of requests by source IP
 
 ## Monitoring
 To monitor the load balancer and nodes, configure your Prometheus server to scrape the /metrics endpoint:
