@@ -49,6 +49,7 @@ type NetworkConfig struct {
     LocalPollInterval              string       `yaml:"local_poll_interval"`
     MonitoringPollInterval         string       `yaml:"monitoring_poll_interval"`
     NetworkBlockDiff               int64        `yaml:"network_block_diff"`
+    FallbackBlockDiff              int64        `yaml:"fallback_block_diff"` // New field
     UseLoadTracker                 bool         `yaml:"use_load_tracker"`
     RPCTimeout                     string       `yaml:"rpc_timeout"`
     RPCRetries                     int          `yaml:"rpc_retries"`
@@ -78,6 +79,7 @@ type NetworkStatus struct {
     FallbackNodeStatuses   []*NodeStatus
     NetworkChainhead       *big.Int
     Mutex                  sync.RWMutex
+    CurrentBestEndpoint    string
 }
 
 type LoadBalancer struct {
@@ -280,39 +282,23 @@ func (lb *LoadBalancer) startMetricsServer() {
 }
 
 func (lb *LoadBalancer) startNetworkMonitoring(ns *NetworkStatus) {
-    var wg sync.WaitGroup
-
     // Monitor local nodes
     for _, node := range ns.LocalNodeStatuses {
         node := node // capture variable
-        wg.Add(1)
-        go func() {
-            defer wg.Done()
-            lb.monitorNode(ns, node, ns.Config.LocalPollIntervalDuration)
-        }()
+        go lb.monitorNode(ns, node, ns.Config.LocalPollIntervalDuration)
     }
 
     // Monitor monitoring nodes
     for _, node := range ns.MonitoringNodeStatuses {
         node := node // capture variable
-        wg.Add(1)
-        go func() {
-            defer wg.Done()
-            lb.monitorNode(ns, node, ns.Config.MonitoringPollIntervalDuration)
-        }()
+        go lb.monitorNode(ns, node, ns.Config.MonitoringPollIntervalDuration)
     }
 
     // Monitor fallback nodes
     for _, node := range ns.FallbackNodeStatuses {
         node := node // capture variable
-        wg.Add(1)
-        go func() {
-            defer wg.Done()
-            lb.monitorNode(ns, node, ns.Config.MonitoringPollIntervalDuration)
-        }()
+        go lb.monitorNode(ns, node, ns.Config.MonitoringPollIntervalDuration)
     }
-
-    wg.Wait()
 }
 
 func (lb *LoadBalancer) startEndpointSelection(ns *NetworkStatus) {
@@ -353,7 +339,7 @@ func (lb *LoadBalancer) monitorNode(ns *NetworkStatus, node *NodeStatus, pollInt
 
         // Update network chainhead
         ns.Mutex.Lock()
-        if ns.NetworkChainhead == nil || chainhead.Cmp(ns.NetworkChainhead) > 0 {
+        if chainhead.Cmp(big.NewInt(0)) > 0 && (ns.NetworkChainhead == nil || chainhead.Cmp(ns.NetworkChainhead) > 0) {
             ns.NetworkChainhead = chainhead
         }
         ns.Mutex.Unlock()
@@ -405,7 +391,7 @@ func (lb *LoadBalancer) getChainheadWithRetries(client *rpc.Client, timeout time
         latency = time.Since(startTime)
         cancel()
 
-        if err == nil {
+        if err == nil && len(chainheadHex) >= 2 {
             chainheadInt := new(big.Int)
             chainheadInt.SetString(chainheadHex[2:], 16)
             return chainheadInt, latency, nil
@@ -451,6 +437,7 @@ func (lb *LoadBalancer) GetBestEndpoint(ns *NetworkStatus) string {
         skipLocalNodes = true
     } else if ns.Config.SwitchToFallbackEnabled {
         chainDiff := new(big.Int).Sub(networkChainhead, localNetworkChainhead)
+        chainDiff.Abs(chainDiff) // Take absolute value
         if chainDiff.Int64() > ns.Config.SwitchToFallbackBlockThreshold {
             lb.logRateLimited("INFO", "local_nodes_behind_"+ns.Config.Name, "Local nodes are %d blocks behind network chainhead for network %s. Switching to fallback nodes.", chainDiff.Int64(), ns.Config.Name)
             skipLocalNodes = true
@@ -458,24 +445,25 @@ func (lb *LoadBalancer) GetBestEndpoint(ns *NetworkStatus) string {
     }
 
     endpointTypes := []struct {
-        nodes            []*NodeStatus
-        description      string
-        networkChainhead *big.Int
+        nodes       []*NodeStatus
+        description string
+        blockDiff   int64
     }{}
 
     if !skipLocalNodes {
         endpointTypes = append(endpointTypes, struct {
-            nodes            []*NodeStatus
-            description      string
-            networkChainhead *big.Int
-        }{ns.LocalNodeStatuses, "local", localNetworkChainhead})
+            nodes       []*NodeStatus
+            description string
+            blockDiff   int64
+        }{ns.LocalNodeStatuses, "local", ns.Config.NetworkBlockDiff})
     }
 
+    // Add fallback nodes
     endpointTypes = append(endpointTypes, struct {
-        nodes            []*NodeStatus
-        description      string
-        networkChainhead *big.Int
-    }{ns.FallbackNodeStatuses, "fallback", networkChainhead})
+        nodes       []*NodeStatus
+        description string
+        blockDiff   int64
+    }{ns.FallbackNodeStatuses, "fallback", ns.Config.FallbackBlockDiff})
 
     for _, endpointType := range endpointTypes {
         nodesToConsider := endpointType.nodes
@@ -483,7 +471,15 @@ func (lb *LoadBalancer) GetBestEndpoint(ns *NetworkStatus) string {
             continue
         }
 
-        validEndpoints := lb.getValidEndpoints(nodesToConsider, endpointType.networkChainhead, ns.Config.NetworkBlockDiff)
+        // Compute the highest chainhead among nodesToConsider
+        endpointChainhead := big.NewInt(0)
+        for _, node := range nodesToConsider {
+            if node.Chainhead != nil && node.Chainhead.Cmp(endpointChainhead) > 0 {
+                endpointChainhead = node.Chainhead
+            }
+        }
+
+        validEndpoints := lb.getValidEndpoints(nodesToConsider, endpointChainhead, endpointType.blockDiff)
         if len(validEndpoints) == 0 {
             continue
         }
@@ -525,7 +521,6 @@ func (lb *LoadBalancer) GetBestEndpoint(ns *NetworkStatus) string {
                 }
             }
         }
-        
 
         if bestEndpoint != "" {
             lb.logRateLimited("INFO", "best_endpoint_"+ns.Config.Name, "Best endpoint selected for network %s: %s (%s)", ns.Config.Name, bestEndpoint, selectionReason)
@@ -541,24 +536,37 @@ func (lb *LoadBalancer) GetBestEndpoint(ns *NetworkStatus) string {
             // Set the selected endpoint to 1
             lb.bestEndpointGauge.WithLabelValues(ns.Config.Name, bestEndpoint).Set(1)
 
+            // Store the best endpoint in the network status
+            ns.Mutex.Lock()
+            ns.CurrentBestEndpoint = bestEndpoint
+            ns.Mutex.Unlock()
+
             return bestEndpoint
         }
     }
 
     // If no valid endpoint was found in any category
     lb.logRateLimited("ERROR", "no_valid_endpoint_"+ns.Config.Name, "No valid endpoint selected for network %s", ns.Config.Name)
+
+    // Clear the current best endpoint since none is valid
+    ns.Mutex.Lock()
+    ns.CurrentBestEndpoint = ""
+    ns.Mutex.Unlock()
+
     return ""
 }
 
-func (lb *LoadBalancer) getValidEndpoints(nodes []*NodeStatus, networkChainhead *big.Int, networkBlockDiff int64) []*NodeStatus {
+func (lb *LoadBalancer) getValidEndpoints(nodes []*NodeStatus, endpointChainhead *big.Int, blockDiff int64) []*NodeStatus {
     validEndpoints := []*NodeStatus{}
     for _, node := range nodes {
         if node.Chainhead == nil {
             continue
         }
-        blockDiff := new(big.Int).Sub(networkChainhead, node.Chainhead).Int64()
-        if blockDiff > networkBlockDiff {
-            continue // Node is too far behind
+        blockDiffBig := new(big.Int).Sub(endpointChainhead, node.Chainhead)
+        blockDiffBig.Abs(blockDiffBig)
+        diff := blockDiffBig.Int64()
+        if diff > blockDiff {
+            continue // Node is too far behind or ahead
         }
         validEndpoints = append(validEndpoints, node)
     }
@@ -579,7 +587,10 @@ func (lb *LoadBalancer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-    bestEndpoint := lb.GetBestEndpoint(networkStatus)
+    // Get the current best endpoint from the network status
+    networkStatus.Mutex.RLock()
+    bestEndpoint := networkStatus.CurrentBestEndpoint
+    networkStatus.Mutex.RUnlock()
 
     if bestEndpoint == "" {
         http.Error(w, "No valid endpoint available for network "+networkName, http.StatusInternalServerError)
@@ -691,7 +702,7 @@ func getServerLoad(prometheusEndpoint string, loadPeriod int) (float64, error) {
         return 0.0, err
     }
     bodyString := string(bodyBytes)
-    
+
     // Select the appropriate metric name based on the LoadPeriod
     var loadMetricName string
     switch loadPeriod {
