@@ -368,6 +368,9 @@ To monitor the load balancer and nodes, configure your Prometheus server to scra
 ```yaml
 scrape_configs:
   - job_name: 'evm-loadbalancer'
+    scrape_interval: 15s
+    metrics_path: /metrics
+    scheme: http
     static_configs:
       - targets: ['localhost:9101']
 ```
