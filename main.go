@@ -636,20 +636,19 @@ func (lb *LoadBalancer) getReverseProxy(endpoint string, networkName string, pat
 
     // Customize the director function
     proxy.Director = func(req *http.Request) {
-        // Set the scheme and host
         req.URL.Scheme = parsedURL.Scheme
         req.URL.Host = parsedURL.Host
-
-        // Modify the path to include any path segments after the network name
-        if len(pathSegments) > 1 {
-            req.URL.Path = path.Join(parsedURL.Path, strings.Join(pathSegments[1:], "/"))
-        } else {
-            req.URL.Path = parsedURL.Path
-        }
-
-        // Set the Host header to the backend host
         req.Host = parsedURL.Host
-
+    
+        // Remove the network name from the request path
+        originalPath := req.URL.Path
+        if strings.HasPrefix(originalPath, "/" + networkName) {
+            req.URL.Path = strings.TrimPrefix(originalPath, "/" + networkName)
+            if req.URL.Path == "" {
+                req.URL.Path = "/"
+            }
+        }
+    
         // Ensure the request body can be read multiple times
         if req.GetBody == nil && req.Body != nil {
             bodyBytes, err := ioutil.ReadAll(req.Body)
@@ -661,6 +660,7 @@ func (lb *LoadBalancer) getReverseProxy(endpoint string, networkName string, pat
             }
         }
     }
+    
 
     // Optionally, capture and log errors from the backend
     proxy.ErrorHandler = func(w http.ResponseWriter, req *http.Request, err error) {
