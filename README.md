@@ -32,22 +32,17 @@ Each node is periodically polled based on the `local_poll_interval` and `monitor
 The core of the system's decision-making revolves around selecting the best node to route requests to based on multiple factors. These factors can be prioritized in the configuration, including:
 
 - **Chainhead**: Nodes that are most in sync with the network are preferred. Nodes with higher block numbers are considered more up-to-date.
-  
 - **Latency**: Nodes with lower response times are prioritized for faster request handling.
-
 - **Load**: If load tracking is enabled, nodes with lower resource usage are preferred to balance the load and avoid overloading a single node.
 
 #### Selection Process:
 
 1. **Chainhead Validation**: 
    - The load balancer checks if nodes are within an acceptable block difference (`network_block_diff`) from the network chainhead. Nodes that are too far behind are excluded.
-   
 2. **Initial Selection**: 
    - Nodes with the highest chainhead are selected first. If multiple nodes have the same chainhead, the load balancer will further prioritize based on the configured load balancing priority (latency or load).
-
 3. **Refinement by Latency and Load**: 
    - If two or more nodes have the same chainhead, the balancer selects the one with the lowest latency or load, based on the priority defined in the configuration (`load_balance_priority`).
-
 4. **Local Node Prioritization**: 
    - If a local node (i.e., a node in the `local_nodes`) is up-to-date and responsive, it is generally prioritized over monitoring or fallback nodes.
 
@@ -60,7 +55,6 @@ Failover is a key part of the system’s resilience. The load balancer categoriz
 - **Fallback Endpoints** (optional): These are the final fallback nodes in case all local nodes are down or not in sync.
 
 The balancer will failover to monitoring or fallback nodes if:
-
 - A local node is behind in blocks (beyond the `network_block_diff`), is slow, or unresponsive.
 - Monitoring nodes are also considered only when local nodes fail, and fallback nodes are considered if neither local nor monitoring nodes are suitable.
 
@@ -71,7 +65,6 @@ The failover process happens automatically without interruption in service, ensu
 Prometheus metrics are used to monitor the load balancer's performance and the health of the nodes. Metrics are exposed on a dedicated `/metrics` endpoint and can be scraped by a Prometheus server for detailed monitoring and alerting.
 
 Key metrics include:
-
 - **Latency (`loadbalancer_node_latency_seconds`)**: Measures the response time of each node.
 - **Chainhead (`loadbalancer_node_chainhead`)**: Monitors the current block number for each node.
 - **Best Endpoint (`loadbalancer_best_endpoint`)**: Indicates the currently selected node for a network.
@@ -81,7 +74,6 @@ Key metrics include:
 ### 5. Proxying Requests
 
 When a request is made to the load balancer, it forwards the request to the best node based on the above logic. The request is routed via an HTTP reverse proxy to the selected Ethereum node.
-
 - If a node fails during the proxying, the load balancer will try another node, ensuring minimal downtime.
 - The balancer maintains a cache of reverse proxies to avoid repeatedly creating new ones for the same endpoint, optimizing performance.
 
@@ -141,12 +133,14 @@ For each network you want to monitor and balance across nodes:
 - `load_period` (optional): Time window in seconds to measure server load.
 - `local_poll_interval`: How often to poll local nodes for status (in Go duration format, e.g., 1s, 5m).
 - `monitoring_poll_interval` (optional): How often to poll monitoring nodes.
-- `network_block_diff`: Max block difference allowed between nodes and the network chainhead.
+- `network_block_diff`: Max block difference allowed between nodes and the network chainhead before the selection algorithm ignores the endpoints that are X blocks behind and uses.
+- `fallback_block_diff`: Max block difference allowed between fallback nodes and the network chainhead before the selection algorithm ignores the endpoints that are X blocks behind.
+- `switch_to_fallback_enabled` (optional): Whether to switch to fallback nodes when falling behind chainhead.
+- `switch_to_fallback_block_threshold` (optional): Number of blocks behind before switching to fallback nodes.
 - `use_load_tracker` (optional): Whether to monitor server load (requires Prometheus or similar setups).
 - `rpc_timeout`: Timeout duration for RPC calls.
 - `rpc_retries`: Number of retries for RPC requests.
-- `switch_to_fallback_enabled` (optional): Whether to switch to fallback nodes when falling behind chainhead.
-- `switch_to_fallback_block_threshold` (optional): Number of blocks behind before switching to fallback nodes.
+
 #### Note on Optional Parameters
 Parameters marked as optional can be omitted. The load balancer will function without them, using default behaviors.
 For example, if `monitoring_nodes` or `fallback_nodes` are not provided, the load balancer will rely solely on the `local_nodes`.
@@ -177,11 +171,11 @@ networks:
     load_balance_priority:                    # (Optional) Priority for load balancing: latency, load, chainhead
       - "latency"
       - "load"
-      - "chainhead"
     load_period: 1                            # (Optional) Load tracking period (in seconds)
     local_poll_interval: "0.5s"               # Poll interval for local nodes
     monitoring_poll_interval: "1s"            # (Optional) Poll interval for monitoring nodes
-    network_block_diff: 5                     # Max allowed block difference
+    network_block_diff: 5                     # Max allowed block difference for a any local nodes to be included in the selection algorithm
+    fallback_block_diff: 50                   # Max allowed block difference for a fallback node to be included in the selection algorithm
     use_load_tracker: true                    # (Optional) Enable load tracking
     rpc_timeout: "5s"                         # Timeout for RPC calls
     rpc_retries: 3                            # Number of retries for failed RPC calls
@@ -215,6 +209,107 @@ networks:
     rpc_timeout: "10s"
     rpc_retries: 5
 ```
+
+## Advanced configuration
+
+### Network_block_diff parameter
+The `network_block_diff` parameter defines the maximum acceptable difference in block heights between local nodes and the highest chainhead observed across all nodes in the network. This setting is crucial in determining whether a local node is considered "in sync" with the overall network.
+
+#### How `network_block_diff` works:
+1. **Identifies Nodes Within the "Acceptable Sync Range"**: When selecting an endpoint, the load balancer looks at all available nodes (local, fallback, monitoring) and calculates the difference in block height between each node's chainhead and the highest observed chainhead across all nodes. A node is only considered as a candidate if its block height is within `network_block_diff` blocks of the highest observed chainhead.
+2. **Improves Endpoint Selection Stability:** By setting a `network_block_diff`, you can ensure that local nodes slightly behind the highest chainhead are still considered for selection, which is useful in networks where minor block height discrepancies are common. This setting prevents frequent switches between endpoints due to minor differences in block height, enhancing load balancer stability.
+3. **Fallback Conditions:** If the local nodes are outside this `network_block_diff` threshold, the load balancer will attempt to switch to a fallback node, provided the fallback node is closer to the highest chainhead or within the allowable difference defined by the fallback_block_diff parameter.
+
+**Example Usage**
+If `network_block_diff` is set to 1, then local nodes lagging more than 1 block behind the highest chainhead are excluded from the selection process.
+If set to a higher value, say 3, then local nodes that are up to 3 blocks behind the highest observed chainhead are considered for selection, which can be helpful in networks with slight block propagation delays.
+
+### Fallback_block_diff parameter
+
+The `fallback_block_diff` parameter controls the maximum allowable block height difference between any fallback node and the highest observed chainhead across all nodes. It determines when a fallback node is considered too far behind the network chainhead to be used as a reliable endpoint.
+
+#### How `fallback_block_diff` works:
+1. **Fallback Node Eligibility:** When the load balancer needs to select a fallback node (usually because local nodes are down or significantly lagging), it assesses each fallback node's block height against the highest chainhead observed across all nodes (local, fallback, and monitoring). Only fallback nodes with block heights within the `fallback_block_diff` of this highest chainhead are considered eligible.
+2. **Fallback Node Selection Among Multiple Options:** If multiple fallback nodes are available, the load balancer chooses the one with the highest chainhead, as long as it is within `fallback_block_diff` blocks of the network chainhead.
+3. **Fallback Node Exclusion Beyond fallback_block_diff**: If all fallback nodes are lagging behind the network chainhead by more than `fallback_block_diff`, they are excluded from the selection, and the load balancer will not route traffic to any fallback nodes. This may result in an error if no other nodes are available within the acceptable range.
+
+**Example Usage**
+If `fallback_block_diff` is set to 10, fallback nodes that are more than 10 blocks behind the highest observed chainhead are excluded from consideration.
+Setting `fallback_block_diff` to a higher value (e.g., 20) allows the load balancer to use fallback nodes that are slightly out of sync with the network, which can be beneficial in environments where fallback nodes typically lag due to slower network updates.
+
+### Switch_to_fallback_block_threshold parameter
+The `switch_to_fallback_block_threshold` parameter defines a block height threshold that triggers a switch from local nodes to fallback nodes when local nodes fall too far behind the network's chainhead. It is used to ensure that traffic is only routed through local nodes if they are reasonably up-to-date with the rest of the network.
+
+##### How `switch_to_fallback_block_threshold` works:
+1. **Switch Condition for Local Nodes:** During endpoint selection, the load balancer checks if the local nodes are lagging behind the highest observed chainhead by more than the `switch_to_fallback_block_threshold` value. If they are, the load balancer disregards the local nodes and attempts to select from available fallback nodes.
+2. **Fallback Nodes as Primary:** *When local nodes exceed this threshold, fallback nodes are prioritized for traffic routing, assuming they are within the acceptable range set by `fallback_block_diff`.
+3. **Resuming Local Node Priority:** If local nodes later catch up to within the threshold, the load balancer can resume routing traffic through them if they are otherwise eligible (based on network_block_diff and load-balancing priorities).
+
+**Example Usage**
+If `switch_to_fallback_block_threshold` is set to 10, the load balancer will switch to fallback nodes if all local nodes are 10 or more blocks behind the network’s chainhead.
+If set to 50, the system allows local nodes to lag slightly further behind before falling back, which can be useful in situations where local nodes are generally stable but occasionally experience minor sync delays.
+
+### To recap
+The difference between `network_block_diff` and `switch_to_fallback_block_threshold` lies in their purposes and the specific conditions under which they influence endpoint selection:
+
+1. Purpose and Scope:
+  - `network_block_diff`: This parameter is a general tolerance level applied only to local nodes to determine if they are "in sync" with the network's chainhead. It controls the maximum allowable block lag for any local node to be considered valid for routing traffic.
+  - `switch_to_fallback_block_threshold`: This parameter specifically applies to local nodes and determines when to stop using them and switch to fallback nodes due to lag. It sets the maximum block height difference between local nodes and the network’s highest chainhead that the load balancer will tolerate before routing traffic to fallback nodes.
+2. When Each Parameter Is Used:
+  - `network_block_diff`: During the endpoint selection process, this parameter ensures that only nodes within a certain block height of the highest chainhead are eligible for traffic. It filters out nodes that are considered too out-of-sync.
+  - `switch_to_fallback_block_threshold`: This parameter is checked only when local nodes fall behind the network chainhead. If local nodes exceed this threshold, the load balancer switches exclusively to fallback nodes, assuming they are within the `fallback_block_diff` range.
+3. Differences in Handling Local Nodes:
+  - `network_block_diff`: Applies to local nodes, fallback nodes, and monitoring nodes equally. A node within network_block_diff blocks of the highest observed chainhead is considered for selection, without any preference or forced switch.
+  - `switch_to_fallback_block_threshold`: Only applies when all local nodes exceed this threshold, forcing a switch to fallback nodes. This ensures that local nodes are only used if they’re reasonably close to the network chainhead.
+
+**Example Scenario:**
+- `network_block_diff` is set to 5.
+- `switch_to_fallback_block_threshold` is set to 10.
+- If a local node is 6 blocks behind the network chainhead, it will not be considered due to `network_block_diff`.
+- If all local nodes are 11 blocks behind the chainhead, the load balancer will switch to fallback nodes because they exceed `switch_to_fallback_block_threshold`.
+- If a fallback node is within 5 blocks of the chainhead (meeting `network_block_diff`), it becomes the active endpoint for traffic.
+In short, `network_block_diff` controls node eligibility based on chainhead sync, while `switch_to_fallback_block_threshold` controls whether to prioritize fallback nodes if local nodes are too far behind.
+
+### What about server load and latency?
+- When the priority is set to **load, then latency** (meaning nodes are selected first by load, then by latency if loads are equal), and `network_block_diff` is set to 10, the load balancer’s behavior will incorporate both the chainhead block difference and the load and latency of nodes. Here’s how each factor would affect selection in this scenario:
+
+  1. **`network_block_diff` as the First Filter:**
+    -  With `network_block_diff` set to 10, the load balancer first filters out any nodes that are more than 10 blocks behind the highest chainhead.
+    - This filtering is applied before considering load or latency, so only nodes within the 10-block range of the highest observed chainhead are eligible for selection.
+  2. **Applying Load Priority:**
+    - Once nodes are filtered to those within the acceptable `network_block_diff`, the load balancer will prioritize nodes based on load.
+    - Among the eligible nodes, the one with the lowest load will be prioritized.
+    - If there are multiple nodes with similar loads, then latency becomes the next criterion.
+  3. **Latency as Secondary Criterion:**
+  - If two or more nodes have the same (or very close) load values, the load balancer will then select the node with the **lowest latency** among them.
+  - Latency only comes into play once nodes are both within the `network_block_diff` range and have comparable loads.
+
+- When the priority is set to **latency, then load**, and `network_block_diff` is set to 10, the load balancer's selection process still begins by filtering nodes based on `network_block_diff`. However, the choice among eligible nodes will favor those with the lowest latency first, only considering load if multiple nodes have similar latencies. Here’s how it works step-by-step:
+
+  1. **Initial Filtering by `network_block_diff`:**
+    - Nodes that are more than 10 blocks behind the highest observed chainhead are filtered out, as set by `network_block_diff`.
+    - This ensures that only nodes within a reasonable sync range are considered, regardless of their latency or load values.
+  2. **Prioritization by Latency:**
+    - Among the remaining eligible nodes, the load balancer will prioritize latency as the primary criterion.
+    - The node with the lowest latency will be selected first, assuming it’s within `network_block_diff`.
+  3. **Load as a Secondary Criterion:**
+  - If two or more nodes have comparable latencies, the load balancer will then choose the node with the lower load among them as a secondary criterion.
+  - Load is only considered if latency alone is not sufficient to differentiate among nodes within the allowed block height range.
+
+### Timeouts and retries
+The `rpc_timeout` and `rpc_retries` parameters control how the load balancer interacts with each node’s RPC endpoint, defining how long it waits for an RPC response and how many times it retries if an RPC call fails.
+
+#### `rpc_timeout`
+The `rpc_timeout` parameter specifies the maximum amount of time (duration) the load balancer will wait for a response from an RPC endpoint before considering the attempt to be timed out.
+- **Usage**: When the load balancer makes an RPC request to a node, it will wait for a response for up to the duration specified by `rpc_timeout`.
+- **If Exceeded**: If the RPC call doesn’t receive a response within this duration, the request is considered failed, and the load balancer will either retry (if `rpc_retries` is greater than 0) or log the failure and move to the next eligible node.
+
+#### `rpc_retries`
+The `rpc_retries` parameter specifies the number of times the load balancer will retry the RPC request if the initial attempt fails (either due to timeout or an error).
+- **Usage**: After an RPC call fails, the load balancer will retry the call up to `rpc_retries` times. Each retry is subject to the same `rpc_timeout`.
+- **Retries and Backoff**: Often, a short backoff (e.g., a few hundred milliseconds) is applied between retries to allow the RPC endpoint time to recover before the next attempt.
+- **After Max Retries**: If the load balancer exhausts all retry attempts without a successful response, it considers the node unreachable or non-responsive for that call, increments error metrics, and logs the issue if configured.
+
 
 ## Running the Load Balancer
 After building the project and setting up the configuration file, you can run the load balancer as follows:
