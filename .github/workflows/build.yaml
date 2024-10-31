@@ -1,12 +1,9 @@
 name: Docker Build and Push
 
 on:
-  create:
-    tags:
-      - 'v*.*.*'
   push:
     tags:
-      - 'v*.*.*'
+      - 'v*'
   workflow_dispatch:
 
 env:
@@ -14,14 +11,32 @@ env:
   IMAGE_NAME: evm-loadbalancer
 
 jobs:
-  docker:
+  list-tags:
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    outputs:
+      tags: ${{ steps.set-tags.outputs.tags }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - id: set-tags
+        run: |
+          TAGS=$(git tag -l 'v*' | jq -R -s -c 'split("\n")[:-1]')
+          echo "tags=$TAGS" >> $GITHUB_OUTPUT
+
+  build:
+    needs: list-tags
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        tag: ${{ fromJson(needs.list-tags.outputs.tags) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Fetch all history for all tags and branches
+          fetch-depth: 0
+          ref: ${{ matrix.tag }}
       
       - name: Set up Go
         uses: actions/setup-go@v5
