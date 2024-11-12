@@ -10,6 +10,9 @@ StakeSquid EVM Load Balancer is a high-performance tool designed to efficiently 
 - Rate-limited logging to reduce log noise
 - Simple YAML-based configuration
 
+## Docker images
+https://hub.docker.com/r/stakesquid/evm-loadbalancer
+
 # How it works?
 ## Overview
 
