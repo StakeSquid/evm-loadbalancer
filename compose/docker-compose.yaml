@@ -1,0 +1,123 @@
+networks:
+  evm-network:
+    driver: bridge
+
+volumes:
+  prometheus_data: {}
+
+services:
+
+###########################################################
+##################### EVM LOADBALANCER ####################
+###########################################################
+
+  evm-loadbalancer:
+    image: stakesquid/evm-loadbalancer:latest
+    container_name: evm-loadbalancer
+    command: ["./main", "--config", "/root/config.yaml"]
+    volumes:
+      - ./config.yaml:/root/config.yaml:ro
+    restart: unless-stopped
+    expose:
+      - "8080"  # RPC
+      - "9101"  # Metrics
+    networks:
+      - evm-network
+    labels:
+      # Enable Traefik
+      - "traefik.enable=true"
+
+      # Ethereum Network
+      - "traefik.http.routers.ethereum.service=ethereum"
+      - "traefik.http.services.ethereum.loadbalancer.server.port=8080"
+      - "traefik.http.routers.ethereum.entrypoints=websecure"
+      - "traefik.http.routers.ethereum.tls.certresolver=myresolver"
+      - "traefik.http.routers.ethereum.rule=Host(`${DOMAIN}`) && PathPrefix(`/ethereum`)"
+      - "traefik.http.routers.ethereum.middlewares=ipwhitelist"
+
+      # Arbitrum Network
+      - "traefik.http.routers.arbitrum.service=arbitrum"
+      - "traefik.http.services.arbitrum.loadbalancer.server.port=8080"
+      - "traefik.http.routers.arbitrum.entrypoints=websecure"
+      - "traefik.http.routers.arbitrum.tls.certresolver=myresolver"
+      - "traefik.http.routers.arbitrum.rule=Host(`${DOMAIN}`) && PathPrefix(`/arbitrum`)"
+      - "traefik.http.routers.arbitrum.middlewares=ipwhitelist"
+
+###########################################################
+########################## TRAEFIK ########################
+###########################################################
+
+  traefik:
+    image: traefik:latest
+    container_name: traefik
+    restart: always
+    expose:
+      - "8082"
+    ports:
+      - "443:443"
+      - "80:80"
+    command:
+      - "--api=true"
+      - "--api.insecure=true"
+      - "--api.dashboard=true"
+      - "--log.level=DEBUG"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.file.filename=/dynamic_config.yml"
+      - "--entrypoints.websecure.address=:443"
+      - "--entryPoints.metrics.address=:8082"
+      - "--metrics.prometheus.entryPoint=metrics"
+      - "--certificatesresolvers.myresolver.acme.tlschallenge=true"
+      - "--certificatesresolvers.myresolver.acme.email=$EMAIL"
+      - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
+    volumes:
+      - "./traefik/letsencrypt:/letsencrypt"
+      - "./traefik/config/dynamic_config.yml:/dynamic_config.yml"
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+    networks:
+      - evm-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.middlewares.ipwhitelist.ipwhitelist.sourcerange=$WHITELIST"
+###########################################################
+####################### PROMETHEUS ########################
+###########################################################
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    restart: unless-stopped
+    volumes:
+      - ./prometheus/prometheus.yaml:/etc/prometheus/prometheus.yaml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yaml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    expose:
+      - "9090"
+    networks:
+      - evm-network
+
+###########################################################
+#################### NODE EXPORTER #######################
+###########################################################
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: node-exporter
+    restart: unless-stopped
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    expose:
+      - "9100"
+    networks:
+      - evm-network
