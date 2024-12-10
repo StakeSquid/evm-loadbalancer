@@ -1,0 +1,18 @@
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'traefik'
+    static_configs:
+      - targets: ['traefik:8082']
+
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+
+  - job_name: 'load-balancer'
+    scheme: http
+    static_configs:
+      - targets: ['evm-loadbalancer:9101']
