@@ -1,0 +1,80 @@
+server:
+  port: 8080
+  metrics_port: 9101
+  log_level: info
+
+rate_limiting:
+  error_log_interval: 1m
+
+networks:
+  - name: mainnet
+    poll_interval: 5s
+    timeout: 10s
+    retry_count: 3
+    block_diff_threshold: 10
+    selection_interval: 5s
+    load_balancing_strategy:
+      - chainhead
+      - latency
+      - load
+    
+    load_balancing_nodes:
+      - url: http://localhost:8545
+        priority: 1
+      - url: ws://localhost:8546
+        priority: 1
+      - url: https://eth-node-1.local:8545
+        prometheus_endpoint: http://eth-node-1.local:9090
+        priority: 2
+      - url: wss://eth-node-2.local:8546
+        prometheus_endpoint: http://eth-node-2.local:9090
+        priority: 2
+    
+    reference_nodes:
+      - url: https://mainnet.infura.io/v3/YOUR_PROJECT_ID
+      - url: https://eth-mainnet.alchemyapi.io/v2/YOUR_API_KEY
+    
+    fallback_nodes:
+      - url: https://cloudflare-eth.com
+      - url: https://rpc.ankr.com/eth
+
+  - name: polygon
+    poll_interval: 3s
+    timeout: 5s
+    retry_count: 2
+    block_diff_threshold: 20
+    selection_interval: 3s
+    load_balancing_strategy:
+      - chainhead
+      - latency
+    
+    load_balancing_nodes:
+      - url: http://polygon-node-1.local:8545
+        priority: 1
+      - url: ws://polygon-node-2.local:8546
+        priority: 1
+    
+    reference_nodes:
+      - url: https://polygon-rpc.com
+    
+    fallback_nodes:
+      - url: https://rpc-mainnet.matic.network
+      - url: https://matic-mainnet.chainstacklabs.com
+
+  - name: arbitrum
+    poll_interval: 2s
+    timeout: 5s
+    retry_count: 2
+    block_diff_threshold: 15
+    selection_interval: 2s
+    load_balancing_strategy:
+      - chainhead
+      - least_connection
+    
+    load_balancing_nodes:
+      - url: http://arbitrum-node.local:8547
+        priority: 1
+    
+    fallback_nodes:
+      - url: https://arb1.arbitrum.io/rpc
+      - url: https://arbitrum-mainnet.infura.io/v3/YOUR_PROJECT_ID

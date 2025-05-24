@@ -1,33 +1,27 @@
 # Build stage
-FROM golang:1.23-alpine AS builder
+FROM golang:1.21-alpine AS builder
+
+RUN apk add --no-cache git
 
 WORKDIR /app
 
-# Install build dependencies
-RUN apk add --no-cache git
-
-# Copy source code
-COPY . .
-
-# Download dependencies
+COPY go.mod go.sum ./
 RUN go mod download
 
-# Build the application
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .
+COPY . .
 
-# Final stage
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o evm-lb cmd/loadbalancer/main.go
+
+# Runtime stage
 FROM alpine:latest
 
-WORKDIR /root/
-
-# Install runtime dependencies
 RUN apk --no-cache add ca-certificates
 
-# Copy the binary from builder
-COPY --from=builder /app/main .
+WORKDIR /app
 
-# Expose port (adjust as needed)
-EXPOSE 8080
+COPY --from=builder /app/evm-lb .
 
-# Run the binary
-CMD ["./main"]
+EXPOSE 8080 9101
+
+ENTRYPOINT ["./evm-lb"]
+CMD ["-config", "/app/config.yaml"]

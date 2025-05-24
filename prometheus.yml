@@ -1,0 +1,13 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'evm-loadbalancer'
+    static_configs:
+      - targets: ['evm-loadbalancer:9101']
+    metric_relabel_configs:
+      # Keep only the most important metrics to reduce cardinality
+      - source_labels: [__name__]
+        regex: 'evm_lb_.*'
+        action: keep
