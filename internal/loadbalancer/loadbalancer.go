@@ -18,24 +18,23 @@ import (
 )
 
 type LoadBalancer struct {
-	config       *config.Manager
-	networks     map[string]*types.NetworkStatus
-	proxy        *proxy.ProxyManager
-	metrics      *metrics.Collector
-	logger       *logrus.Logger
-	rateLimiter  *logger.RateLimiter
-	server       *http.Server
-	metricsPort  int
+	config      *config.Manager
+	networks    map[string]*types.NetworkStatus
+	proxy       *proxy.ProxyManager
+	metrics     *metrics.Collector
+	logger      *logrus.Logger
+	rateLimiter *logger.RateLimiter
+	server      *http.Server
+	metricsPort int
 }
 
-func New(configPath string) (*LoadBalancer, error) {
-	configMgr, err := config.NewManager(configPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load config: %w", err)
+func New(configMgr *config.Manager) (*LoadBalancer, error) {
+	if configMgr == nil {
+		return nil, fmt.Errorf("config manager is nil")
 	}
 
 	cfg := configMgr.GetConfig()
-	
+
 	log, err := logger.SetupLogger(cfg.Server.LogLevel)
 	if err != nil {
 		return nil, fmt.Errorf("failed to setup logger: %w", err)
@@ -54,11 +53,16 @@ func New(configPath string) (*LoadBalancer, error) {
 	}
 
 	metricsCollector := metrics.NewCollector()
-	
+
 	proxyMgr := proxy.NewProxyManager(networks, log.WithField("component", "proxy"), rateLimiter)
 
+	addr := ""
+	if cfg.Server.Port > 0 {
+		addr = fmt.Sprintf(":%d", cfg.Server.Port)
+	}
+
 	server := &http.Server{
-		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),
+		Addr:         addr,
 		Handler:      proxyMgr,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
@@ -86,23 +90,23 @@ func (lb *LoadBalancer) Start(ctx context.Context) error {
 
 	for _, netConfig := range lb.config.GetNetworkConfigs() {
 		networkStatus := lb.networks[netConfig.Name]
-		
+
 		pollInterval, _ := time.ParseDuration(netConfig.PollInterval)
 		timeout, _ := time.ParseDuration(netConfig.Timeout)
 		selectionInterval, _ := time.ParseDuration(netConfig.SelectionInterval)
 
-		allNodes := append(append(networkStatus.LoadBalancingNodes, 
-			networkStatus.ReferenceNodes...), 
+		allNodes := append(append(networkStatus.LoadBalancingNodes,
+			networkStatus.ReferenceNodes...),
 			networkStatus.FallbackNodes...)
 
-		for _, node := range allNodes {
+		for _, n := range allNodes {
 			wg.Add(1)
-			go func(n *types.NodeStatus) {
+			go func(nodeStatus *types.NodeStatus) {
 				defer wg.Done()
-				monitor := node.NewMonitor(n, pollInterval, timeout, netConfig.RetryCount, 
+				monitor := node.NewMonitor(nodeStatus, pollInterval, timeout, netConfig.RetryCount,
 					lb.logger.WithField("component", "monitor"), lb.rateLimiter)
 				monitor.Start(ctx)
-			}(node)
+			}(n)
 		}
 
 		wg.Add(1)
@@ -139,11 +143,11 @@ func (lb *LoadBalancer) Start(ctx context.Context) error {
 		lb.logger.Info("Shutting down load balancer")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		
+
 		if err := lb.server.Shutdown(shutdownCtx); err != nil {
 			lb.logger.WithError(err).Error("Failed to shutdown server gracefully")
 		}
-		
+
 		wg.Wait()
 		return nil
 	case err := <-errChan:
@@ -166,8 +170,8 @@ func (lb *LoadBalancer) updateMetricsLoop(ctx context.Context, network *types.Ne
 }
 
 func (lb *LoadBalancer) updateNetworkMetrics(network *types.NetworkStatus) {
-	allNodes := append(append(network.LoadBalancingNodes, 
-		network.ReferenceNodes...), 
+	allNodes := append(append(network.LoadBalancingNodes,
+		network.ReferenceNodes...),
 		network.FallbackNodes...)
 
 	for _, node := range allNodes {
@@ -180,8 +184,12 @@ func (lb *LoadBalancer) updateNetworkMetrics(network *types.NetworkStatus) {
 	if httpBest != nil {
 		lb.metrics.UpdateSelectedEndpoint(network.Name, allNodes, httpBest, types.ProtocolHTTP)
 	}
-	
+
 	if wsBest != nil {
 		lb.metrics.UpdateSelectedEndpoint(network.Name, allNodes, wsBest, types.ProtocolWebSocket)
 	}
+}
+
+func (lb *LoadBalancer) Handler() http.Handler {
+	return lb.proxy
 }

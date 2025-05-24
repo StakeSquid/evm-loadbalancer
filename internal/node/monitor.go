@@ -63,7 +63,7 @@ func (m *Monitor) poll(ctx context.Context) {
 		if err == nil {
 			break
 		}
-		
+
 		if retry < m.retryCount {
 			time.Sleep(time.Second * time.Duration(retry+1))
 		}
@@ -77,7 +77,7 @@ func (m *Monitor) poll(ctx context.Context) {
 	m.node.Update(chainHead, latency, load, err)
 
 	if err != nil {
-		m.rateLimiter.LogError(m.node.URL.String(), "poll_error", 
+		m.rateLimiter.LogError(m.node.URL.String(), "poll_error",
 			fmt.Sprintf("Failed to poll node: %v", err))
 	} else {
 		m.logger.WithFields(logrus.Fields{
@@ -100,7 +100,7 @@ func (m *Monitor) fetchChainHead(ctx context.Context) (int64, time.Duration, err
 
 func (m *Monitor) fetchLoad(ctx context.Context) float64 {
 	promURL := fmt.Sprintf("%s/metrics", m.node.URL.Host)
-	
+
 	req, err := http.NewRequestWithContext(ctx, "GET", promURL, nil)
 	if err != nil {
 		return 0
@@ -121,7 +121,7 @@ func (m *Monitor) fetchLoad(ctx context.Context) float64 {
 	var metrics struct {
 		Load1Min float64 `json:"load_1min"`
 	}
-	
+
 	if err := json.Unmarshal(body, &metrics); err != nil {
 		return 0
 	}

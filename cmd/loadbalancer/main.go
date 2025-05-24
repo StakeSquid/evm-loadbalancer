@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/evm-loadbalancer/internal/config"
 	"github.com/evm-loadbalancer/internal/loadbalancer"
 	"github.com/sirupsen/logrus"
 )
@@ -22,7 +23,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	lb, err := loadbalancer.New(configPath)
+	configManager, err := config.NewManager(configPath)
+	if err != nil {
+		logrus.WithError(err).Fatal("Failed to load configuration")
+	}
+
+	lb, err := loadbalancer.New(configManager)
 	if err != nil {
 		logrus.WithError(err).Fatal("Failed to initialize load balancer")
 	}

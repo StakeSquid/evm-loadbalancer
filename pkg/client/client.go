@@ -36,7 +36,7 @@ func NewRPCClient(url string, timeout time.Duration) (*RPCClient, error) {
 
 func (c *RPCClient) GetBlockNumber(ctx context.Context) (int64, time.Duration, error) {
 	start := time.Now()
-	
+
 	blockNumber, err := c.client.BlockNumber(ctx)
 	if err != nil {
 		return 0, 0, fmt.Errorf("failed to get block number: %w", err)
@@ -51,7 +51,7 @@ func (c *RPCClient) GetBlockByNumber(ctx context.Context, number *big.Int) (int6
 	if err != nil {
 		return 0, fmt.Errorf("failed to get block: %w", err)
 	}
-	
+
 	return block.Number().Int64(), nil
 }
 

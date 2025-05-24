@@ -125,7 +125,7 @@ type NetworkStatus struct {
 func (ns *NetworkStatus) SetBestEndpoint(node *NodeStatus, protocol Protocol) {
 	ns.mu.Lock()
 	defer ns.mu.Unlock()
-	
+
 	switch protocol {
 	case ProtocolHTTP, ProtocolHTTPS:
 		ns.BestEndpointHTTP = node
@@ -137,7 +137,7 @@ func (ns *NetworkStatus) SetBestEndpoint(node *NodeStatus, protocol Protocol) {
 func (ns *NetworkStatus) GetBestEndpoint(protocol Protocol) *NodeStatus {
 	ns.mu.RLock()
 	defer ns.mu.RUnlock()
-	
+
 	switch protocol {
 	case ProtocolHTTP, ProtocolHTTPS:
 		return ns.BestEndpointHTTP

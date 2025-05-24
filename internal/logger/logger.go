@@ -29,7 +29,7 @@ func (r *RateLimiter) LogError(node, errorType, message string) {
 
 	key := fmt.Sprintf("%s:%s", node, errorType)
 	lastLog, exists := r.lastLogTimes[key]
-	
+
 	if !exists || time.Since(lastLog) >= r.errorLogInterval {
 		r.logger.WithFields(logrus.Fields{
 			"node":       node,
@@ -45,7 +45,7 @@ func (r *RateLimiter) LogWarning(node, warningType, message string) {
 
 	key := fmt.Sprintf("%s:%s:warning", node, warningType)
 	lastLog, exists := r.lastLogTimes[key]
-	
+
 	if !exists || time.Since(lastLog) >= r.errorLogInterval {
 		r.logger.WithFields(logrus.Fields{
 			"node":         node,
@@ -68,4 +68,13 @@ func SetupLogger(logLevel string) (*logrus.Logger, error) {
 	logger.SetLevel(level)
 
 	return logger, nil
+}
+
+func InitLogger(logLevel string) {
+	logger, err := SetupLogger(logLevel)
+	if err != nil {
+		panic(err)
+	}
+	logrus.SetLevel(logger.Level)
+	logrus.SetFormatter(logger.Formatter)
 }

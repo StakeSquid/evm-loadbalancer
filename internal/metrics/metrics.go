@@ -138,7 +138,7 @@ func NewCollector() *Collector {
 
 func (c *Collector) UpdateNodeMetrics(network string, node *types.NodeStatus) {
 	chainHead, latency, load, healthy, blocksBehind := node.GetStatus()
-	
+
 	labels := prometheus.Labels{
 		"network":   network,
 		"node":      node.URL.String(),
@@ -149,7 +149,7 @@ func (c *Collector) UpdateNodeMetrics(network string, node *types.NodeStatus) {
 	c.nodeLatency.With(labels).Set(float64(latency.Milliseconds()))
 	c.nodeLoad.With(labels).Set(load)
 	c.nodeBlocksBehind.With(labels).Set(float64(blocksBehind))
-	
+
 	if healthy {
 		c.nodeHealthy.With(labels).Set(1)
 	} else {
@@ -164,7 +164,7 @@ func (c *Collector) UpdateSelectedEndpoint(network string, nodes []*types.NodeSt
 			"node":     node.URL.String(),
 			"protocol": string(protocol),
 		}
-		
+
 		if node == selected {
 			c.selectedEndpoint.With(labels).Set(1)
 		} else {
@@ -189,7 +189,7 @@ func (c *Collector) RecordHTTPRequest(network, clientIP, method string, status i
 		"method":    method,
 		"status":    strconv.Itoa(status),
 	}
-	
+
 	c.httpRequestsTotal.With(labels).Inc()
 	c.httpRequestDuration.With(prometheus.Labels{
 		"network": network,
@@ -202,7 +202,7 @@ func (c *Collector) IncrementWebSocketConnection(network, clientIP string) {
 		"network":   network,
 		"client_ip": clientIP,
 	}).Inc()
-	
+
 	c.wsConnectionsActive.With(prometheus.Labels{
 		"network":   network,
 		"client_ip": clientIP,
@@ -214,7 +214,7 @@ func (c *Collector) DecrementWebSocketConnection(network, clientIP string, durat
 		"network":   network,
 		"client_ip": clientIP,
 	}).Dec()
-	
+
 	c.wsConnectionDuration.With(prometheus.Labels{
 		"network": network,
 	}).Observe(duration.Seconds())
@@ -225,12 +225,23 @@ func (c *Collector) Handler() http.Handler {
 }
 
 func StartMetricsServer(port int, collector *Collector, logger *logrus.Entry) {
-	http.Handle("/metrics", collector.Handler())
-	
+	if port == 0 {
+		logger.Info("Metrics server disabled (port=0)")
+		return
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", collector.Handler())
+
 	addr := ":" + strconv.Itoa(port)
 	logger.WithField("port", port).Info("Starting metrics server")
-	
-	if err := http.ListenAndServe(addr, nil); err != nil {
-		logger.WithError(err).Fatal("Failed to start metrics server")
+
+	server := &http.Server{
+		Addr:    addr,
+		Handler: mux,
+	}
+
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		logger.WithError(err).Error("Failed to start metrics server")
 	}
 }

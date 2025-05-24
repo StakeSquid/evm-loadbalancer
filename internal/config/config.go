@@ -45,11 +45,11 @@ func (m *Manager) ParseDuration(d string) (time.Duration, error) {
 }
 
 func validateConfig(config *types.Config) error {
-	if config.Server.Port <= 0 {
+	if config.Server.Port < 0 {
 		return fmt.Errorf("invalid server port: %d", config.Server.Port)
 	}
-	
-	if config.Server.MetricsPort <= 0 {
+
+	if config.Server.MetricsPort < 0 {
 		return fmt.Errorf("invalid metrics port: %d", config.Server.MetricsPort)
 	}
 
@@ -61,7 +61,7 @@ func validateConfig(config *types.Config) error {
 		if network.Name == "" {
 			return fmt.Errorf("network name cannot be empty")
 		}
-		
+
 		if len(network.LoadBalancingNodes) == 0 && len(network.FallbackNodes) == 0 {
 			return fmt.Errorf("network %s must have at least one node", network.Name)
 		}

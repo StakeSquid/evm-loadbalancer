@@ -11,12 +11,12 @@ import (
 )
 
 type EndpointSelector struct {
-	networkStatus     *types.NetworkStatus
-	strategies        []types.LoadBalancingStrategy
+	networkStatus      *types.NetworkStatus
+	strategies         []types.LoadBalancingStrategy
 	blockDiffThreshold int64
-	selectionInterval time.Duration
-	logger            *logrus.Entry
-	rateLimiter       *logger.RateLimiter
+	selectionInterval  time.Duration
+	logger             *logrus.Entry
+	rateLimiter        *logger.RateLimiter
 }
 
 func NewEndpointSelector(
@@ -76,7 +76,7 @@ func (s *EndpointSelector) calculateNetworkChainHead() int64 {
 	var maxChainHead int64
 
 	allNodes := append(s.networkStatus.LoadBalancingNodes, s.networkStatus.ReferenceNodes...)
-	
+
 	for _, node := range allNodes {
 		chainHead, _, _, healthy, _ := node.GetStatus()
 		if healthy && chainHead > maxChainHead {
@@ -88,8 +88,8 @@ func (s *EndpointSelector) calculateNetworkChainHead() int64 {
 }
 
 func (s *EndpointSelector) updateBlocksBehind(networkChainHead int64) {
-	allNodes := append(append(s.networkStatus.LoadBalancingNodes, 
-		s.networkStatus.ReferenceNodes...), 
+	allNodes := append(append(s.networkStatus.LoadBalancingNodes,
+		s.networkStatus.ReferenceNodes...),
 		s.networkStatus.FallbackNodes...)
 
 	for _, node := range allNodes {
@@ -102,7 +102,7 @@ func (s *EndpointSelector) updateBlocksBehind(networkChainHead int64) {
 
 func (s *EndpointSelector) selectEndpointForProtocol(protocol types.Protocol, networkChainHead int64) *types.NodeStatus {
 	candidates := s.getEligibleNodes(protocol, networkChainHead)
-	
+
 	if len(candidates) == 0 {
 		s.rateLimiter.LogError(s.networkStatus.Name, "no_eligible_nodes",
 			"No eligible nodes available")
@@ -136,7 +136,7 @@ func (s *EndpointSelector) getEligibleNodes(protocol types.Protocol, networkChai
 
 func (s *EndpointSelector) isNodeEligible(node *types.NodeStatus, protocol types.Protocol, networkChainHead int64) bool {
 	chainHead, _, _, healthy, blocksBehind := node.GetStatus()
-	
+
 	if !healthy {
 		return false
 	}
@@ -163,7 +163,7 @@ func (s *EndpointSelector) isProtocolCompatible(nodeProtocol, requestedProtocol 
 	if contains(httpProtocols, requestedProtocol) {
 		return contains(httpProtocols, nodeProtocol)
 	}
-	
+
 	if contains(wsProtocols, requestedProtocol) {
 		return contains(wsProtocols, nodeProtocol)
 	}

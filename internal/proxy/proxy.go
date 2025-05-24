@@ -1,8 +1,10 @@
 package proxy
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
-	"io"
+	"io/ioutil"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -42,16 +44,16 @@ func NewProxyManager(networks map[string]*types.NetworkStatus, logger *logrus.En
 
 func (p *ProxyManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
-	
+
 	networkName, remainingPath := p.extractNetworkFromPath(r.URL.Path)
 	if networkName == "" {
-		http.Error(w, "Network not specified", http.StatusBadRequest)
+		p.writeJSONRPCError(w, -32600, "Network not specified", nil)
 		return
 	}
 
 	network, exists := p.networks[networkName]
 	if !exists {
-		http.Error(w, "Unknown network", http.StatusNotFound)
+		p.writeJSONRPCError(w, -32600, "Unknown network", nil)
 		return
 	}
 
@@ -67,12 +69,12 @@ func (p *ProxyManager) handleHTTP(w http.ResponseWriter, r *http.Request, networ
 	endpoint := network.GetBestEndpoint(types.ProtocolHTTP)
 	if endpoint == nil {
 		p.rateLimiter.LogError(network.Name, "no_endpoint", "No available endpoint")
-		http.Error(w, "No available endpoint", http.StatusServiceUnavailable)
+		p.writeJSONRPCError(w, -32603, "No available endpoint", nil)
 		return
 	}
 
 	proxy := p.getOrCreateHTTPProxy(endpoint.URL)
-	
+
 	r.URL.Path = path
 	r.URL.Host = endpoint.URL.Host
 	r.URL.Scheme = endpoint.URL.Scheme
@@ -93,13 +95,13 @@ func (p *ProxyManager) handleWebSocket(w http.ResponseWriter, r *http.Request, n
 	endpoint := network.GetBestEndpoint(types.ProtocolWebSocket)
 	if endpoint == nil {
 		p.rateLimiter.LogError(network.Name, "no_ws_endpoint", "No available WebSocket endpoint")
-		http.Error(w, "No available WebSocket endpoint", http.StatusServiceUnavailable)
+		p.writeJSONRPCError(w, -32603, "No available WebSocket endpoint", nil)
 		return
 	}
 
 	targetURL := *endpoint.URL
 	targetURL.Path = path
-	
+
 	if targetURL.Scheme == "http" {
 		targetURL.Scheme = "ws"
 	} else if targetURL.Scheme == "https" {
@@ -113,7 +115,7 @@ func (p *ProxyManager) handleWebSocket(w http.ResponseWriter, r *http.Request, n
 	}).Debug("Proxying WebSocket connection")
 
 	if err := p.proxyWebSocket(w, r, &targetURL); err != nil {
-		p.rateLimiter.LogError(network.Name, "ws_proxy_error", 
+		p.rateLimiter.LogError(network.Name, "ws_proxy_error",
 			fmt.Sprintf("WebSocket proxy error: %v", err))
 	}
 }
@@ -183,10 +185,40 @@ func (p *ProxyManager) getOrCreateHTTPProxy(target *url.URL) *httputil.ReversePr
 	}
 
 	proxy := httputil.NewSingleHostReverseProxy(target)
+
+	origDirector := proxy.Director
+	proxy.Director = func(r *http.Request) {
+		origDirector(r)
+	}
+
+	proxy.ModifyResponse = func(resp *http.Response) error {
+		if resp.StatusCode >= 500 {
+			p.rateLimiter.LogError(target.String(), "upstream_error",
+				fmt.Sprintf("Upstream returned %d", resp.StatusCode))
+
+			// Replace the error response with a JSON-RPC error
+			errorResp := map[string]interface{}{
+				"jsonrpc": "2.0",
+				"error": map[string]interface{}{
+					"code":    -32603,
+					"message": fmt.Sprintf("Upstream server error: %d", resp.StatusCode),
+				},
+				"id": 1,
+			}
+
+			body, _ := json.Marshal(errorResp)
+			resp.Body = ioutil.NopCloser(bytes.NewReader(body))
+			resp.ContentLength = int64(len(body))
+			resp.Header.Set("Content-Type", "application/json")
+			resp.StatusCode = http.StatusOK
+		}
+		return nil
+	}
+
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		p.rateLimiter.LogError(target.String(), "proxy_error", 
+		p.rateLimiter.LogError(target.String(), "proxy_error",
 			fmt.Sprintf("HTTP proxy error: %v", err))
-		http.Error(w, "Proxy error", http.StatusBadGateway)
+		p.writeJSONRPCError(w, -32603, "Internal proxy error", nil)
 	}
 
 	transport := &http.Transport{
@@ -206,13 +238,13 @@ func (p *ProxyManager) extractNetworkFromPath(path string) (string, string) {
 	if len(parts) == 0 {
 		return "", ""
 	}
-	
+
 	networkName := parts[0]
 	remainingPath := "/"
 	if len(parts) > 1 {
 		remainingPath = "/" + parts[1]
 	}
-	
+
 	return networkName, remainingPath
 }
 
@@ -243,7 +275,7 @@ func (w *WebSocketProxy) Start() error {
 				errChan <- err
 				return
 			}
-			
+
 			if err := w.targetConn.WriteMessage(messageType, p); err != nil {
 				errChan <- err
 				return
@@ -258,7 +290,7 @@ func (w *WebSocketProxy) Start() error {
 				errChan <- err
 				return
 			}
-			
+
 			if err := w.clientConn.WriteMessage(messageType, p); err != nil {
 				errChan <- err
 				return
@@ -267,4 +299,23 @@ func (w *WebSocketProxy) Start() error {
 	}()
 
 	return <-errChan
+}
+
+func (p *ProxyManager) writeJSONRPCError(w http.ResponseWriter, code int, message string, id interface{}) {
+	if id == nil {
+		id = 1
+	}
+
+	response := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"error": map[string]interface{}{
+			"code":    code,
+			"message": message,
+		},
+		"id": id,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(response)
 }
