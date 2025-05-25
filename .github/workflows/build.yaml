@@ -5,9 +5,7 @@ on:
     tags:
       - 'v*'
   release:
-    types: [published]  # Only full releases
-  release:
-    types: [prereleased]  # Only pre-releases
+    types: [published, prereleased]  # Both full releases and pre-releases
   workflow_dispatch:
     inputs:
       tag:
