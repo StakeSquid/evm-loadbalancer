@@ -119,6 +119,7 @@ func (lb *LoadBalancer) Start(ctx context.Context) error {
 				selectionInterval,
 				lb.logger.WithField("component", "selector"),
 				lb.rateLimiter,
+				lb.metrics,
 			)
 			endpointSelector.Start(ctx)
 		}(networkStatus, netConfig)

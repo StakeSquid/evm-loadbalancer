@@ -24,6 +24,13 @@ type Collector struct {
 	wsConnectionsActive  *prometheus.GaugeVec
 	wsConnectionsTotal   *prometheus.CounterVec
 	wsConnectionDuration *prometheus.HistogramVec
+	// Selection metrics
+	selectionDuration    *prometheus.HistogramVec
+	selectionAttempts    *prometheus.CounterVec
+	eligibleNodes        *prometheus.GaugeVec
+	ineligibleNodes      *prometheus.CounterVec
+	selectionChanges     *prometheus.CounterVec
+	networkChainHead     *prometheus.GaugeVec
 	registry             *prometheus.Registry
 }
 
@@ -115,6 +122,49 @@ func NewCollector() *Collector {
 			},
 			[]string{"network"},
 		),
+		selectionDuration: prometheus.NewHistogramVec(
+			prometheus.HistogramOpts{
+				Name:    "evm_lb_selection_duration_seconds",
+				Help:    "Duration of endpoint selection process in seconds",
+				Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1},
+			},
+			[]string{"network"},
+		),
+		selectionAttempts: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "evm_lb_selection_attempts_total",
+				Help: "Total number of endpoint selection attempts",
+			},
+			[]string{"network", "protocol", "result"},
+		),
+		eligibleNodes: prometheus.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Name: "evm_lb_eligible_nodes",
+				Help: "Number of nodes eligible for selection",
+			},
+			[]string{"network", "protocol", "node_type"},
+		),
+		ineligibleNodes: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "evm_lb_ineligible_nodes_total",
+				Help: "Total number of nodes excluded from selection",
+			},
+			[]string{"network", "protocol", "reason"},
+		),
+		selectionChanges: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "evm_lb_selection_changes_total",
+				Help: "Total number of times the selected endpoint changed",
+			},
+			[]string{"network", "protocol"},
+		),
+		networkChainHead: prometheus.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Name: "evm_lb_network_chainhead",
+				Help: "Current network-wide chain head (highest block number)",
+			},
+			[]string{"network"},
+		),
 	}
 
 	c.registry = prometheus.NewRegistry()
@@ -131,6 +181,12 @@ func NewCollector() *Collector {
 		c.wsConnectionsActive,
 		c.wsConnectionsTotal,
 		c.wsConnectionDuration,
+		c.selectionDuration,
+		c.selectionAttempts,
+		c.eligibleNodes,
+		c.ineligibleNodes,
+		c.selectionChanges,
+		c.networkChainHead,
 	)
 
 	return c
@@ -218,6 +274,49 @@ func (c *Collector) DecrementWebSocketConnection(network, clientIP string, durat
 	c.wsConnectionDuration.With(prometheus.Labels{
 		"network": network,
 	}).Observe(duration.Seconds())
+}
+
+func (c *Collector) RecordSelectionDuration(network string, duration time.Duration) {
+	c.selectionDuration.With(prometheus.Labels{
+		"network": network,
+	}).Observe(duration.Seconds())
+}
+
+func (c *Collector) RecordSelectionAttempt(network, protocol, result string) {
+	c.selectionAttempts.With(prometheus.Labels{
+		"network":  network,
+		"protocol": protocol,
+		"result":   result,
+	}).Inc()
+}
+
+func (c *Collector) UpdateEligibleNodes(network, protocol, nodeType string, count int) {
+	c.eligibleNodes.With(prometheus.Labels{
+		"network":   network,
+		"protocol":  protocol,
+		"node_type": nodeType,
+	}).Set(float64(count))
+}
+
+func (c *Collector) RecordIneligibleNode(network, protocol, reason string) {
+	c.ineligibleNodes.With(prometheus.Labels{
+		"network":  network,
+		"protocol": protocol,
+		"reason":   reason,
+	}).Inc()
+}
+
+func (c *Collector) RecordSelectionChange(network, protocol string) {
+	c.selectionChanges.With(prometheus.Labels{
+		"network":  network,
+		"protocol": protocol,
+	}).Inc()
+}
+
+func (c *Collector) UpdateNetworkChainHead(network string, chainHead int64) {
+	c.networkChainHead.With(prometheus.Labels{
+		"network": network,
+	}).Set(float64(chainHead))
 }
 
 func (c *Collector) Handler() http.Handler {

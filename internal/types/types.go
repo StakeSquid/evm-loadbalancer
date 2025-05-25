@@ -4,6 +4,8 @@ import (
 	"net/url"
 	"sync"
 	"time"
+
+	"github.com/sirupsen/logrus"
 )
 
 type NodeType string
@@ -84,6 +86,10 @@ func (ns *NodeStatus) Update(chainHead int64, latency time.Duration, load float6
 	ns.mu.Lock()
 	defer ns.mu.Unlock()
 
+	previousHealthy := ns.Healthy
+	previousChainHead := ns.ChainHead
+	previousErrorCount := ns.ErrorCount
+
 	ns.LastUpdate = time.Now()
 	if err != nil {
 		ns.LastError = err
@@ -97,6 +103,46 @@ func (ns *NodeStatus) Update(chainHead int64, latency time.Duration, load float6
 		ns.ErrorCount = 0
 		ns.LastError = nil
 	}
+
+	// Log state transitions for debugging race conditions
+	if previousHealthy != ns.Healthy {
+		logEntry := logrus.WithFields(logrus.Fields{
+			"node":               ns.URL.String(),
+			"node_type":          ns.NodeType,
+			"previous_healthy":   previousHealthy,
+			"current_healthy":    ns.Healthy,
+			"previous_chainhead": previousChainHead,
+			"current_chainhead":  ns.ChainHead,
+			"error_count":        ns.ErrorCount,
+			"latency_ms":         latency.Milliseconds(),
+		})
+		if err != nil {
+			logEntry = logEntry.WithError(err)
+		}
+		logEntry.Debug("Node health state transition")
+	}
+
+	// Log when error count increases
+	if ns.ErrorCount > previousErrorCount {
+		logrus.WithFields(logrus.Fields{
+			"node":               ns.URL.String(),
+			"node_type":          ns.NodeType,
+			"previous_errors":    previousErrorCount,
+			"current_errors":     ns.ErrorCount,
+			"healthy":            ns.Healthy,
+		}).WithError(err).Debug("Node error count increased")
+	}
+
+	// Log significant chain head changes
+	if ns.Healthy && previousChainHead > 0 && chainHead > previousChainHead+10 {
+		logrus.WithFields(logrus.Fields{
+			"node":               ns.URL.String(),
+			"node_type":          ns.NodeType,
+			"previous_chainhead": previousChainHead,
+			"current_chainhead":  chainHead,
+			"jump":               chainHead - previousChainHead,
+		}).Debug("Node chain head jumped significantly")
+	}
 }
 
 func (ns *NodeStatus) GetStatus() (int64, time.Duration, float64, bool, int64) {
@@ -108,7 +154,19 @@ func (ns *NodeStatus) GetStatus() (int64, time.Duration, float64, bool, int64) {
 func (ns *NodeStatus) SetBlocksBehind(blocks int64) {
 	ns.mu.Lock()
 	defer ns.mu.Unlock()
+	previousBlocksBehind := ns.BlocksBehind
 	ns.BlocksBehind = blocks
+
+	// Log significant changes in blocks behind
+	if previousBlocksBehind != blocks && (blocks > 5 || previousBlocksBehind > 5) {
+		logrus.WithFields(logrus.Fields{
+			"node":                  ns.URL.String(),
+			"node_type":             ns.NodeType,
+			"previous_blocks_behind": previousBlocksBehind,
+			"current_blocks_behind":  blocks,
+			"healthy":               ns.Healthy,
+		}).Debug("Node blocks behind changed")
+	}
 }
 
 type NetworkStatus struct {

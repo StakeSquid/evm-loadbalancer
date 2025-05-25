@@ -74,6 +74,15 @@ func (m *Monitor) poll(ctx context.Context) {
 		load = m.fetchLoad(ctx)
 	}
 
+	// Log poll attempt details for debugging
+	m.logger.WithFields(logrus.Fields{
+		"chainhead":   chainHead,
+		"latency_ms":  latency.Milliseconds(),
+		"load":        load,
+		"has_error":   err != nil,
+		"retry_count": m.retryCount,
+	}).Debug("Node poll attempt complete")
+
 	m.node.Update(chainHead, latency, load, err)
 
 	if err != nil {
