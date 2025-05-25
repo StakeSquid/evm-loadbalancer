@@ -4,6 +4,10 @@ on:
   push:
     tags:
       - 'v*'
+  release:
+    types: [published]  # Only full releases
+  release:
+    types: [prereleased]  # Only pre-releases
   workflow_dispatch:
     inputs:
       tag:
